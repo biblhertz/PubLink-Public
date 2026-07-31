@@ -163,4 +163,4 @@ Originally developed by Chris Tomlinson ([@hawkenbury](https://github.com/hawken
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL-3.0-or-later — see [LICENSE](LICENSE) / [docs/COPYING](docs/COPYING). This project incorporates GPL-3.0 schema files (`docker/publink/xsd/ojs/`) from the Open Journal Systems (PKP) project, copyright Simon Fraser University and John Willinsky.
