@@ -152,3 +152,15 @@ Detailed documentation is available in the `/documentation` directory:
 
 - `database_tables.docx` — relational database schema
 - `framework.docx` — system architecture and operation
+
+---
+
+## Credits
+
+Originally developed by Chris Tomlinson ([@hawkenbury](https://github.com/hawkenbury)).
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
