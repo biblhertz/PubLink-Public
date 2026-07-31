@@ -18,4 +18,7 @@ docker/local-data
 /docker/src/baremetal-config.ini
 /config.ini
 /init.cfg
+/docker/init.cfg
+/docker/.env
+.env
 

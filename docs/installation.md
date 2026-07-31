@@ -87,6 +87,8 @@ The init script collects settings interactively and writes two files:
 
 Inside the `php` container, `php/entrypoint.sh` reads the environment variables and generates `config.ini` at startup. You never need to edit `config.ini` by hand.
 
+> **Security note:** `docker/init.cfg` and `docker/.env` are where your real credentials live once you've run the init script for a genuine install (site URL, `ORCID_CLIENT_SECRET`, `PRIMO_API_KEY`, `GOOGLE_BOOKS_API_KEY`, the generated `DB_PASSWORD`, etc.). Both are excluded in `.gitignore`, but **git only respects that going forward — it won't undo a commit that already happened.** If you fork or copy this project for your own deployment, never run `git add`/`git commit` from inside a live, configured install without checking `git status` first. The same applies to `docker/mysql/bibliotheca.sql`: it ships here as schema-only (no real rows) so it can seed a fresh database, but `dbbackup.sh` overwrites that same path with a real production dump so it reloads on the next container start. If that dump is ever staged and committed, treat every credential and user record in it as compromised — rotate everything, and get a fresh sanitized history rather than trying to edit the leak out of an existing commit.
+
 ---
 
 ## 3. Pre-installation Checklist
