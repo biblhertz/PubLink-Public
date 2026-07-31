@@ -1,0 +1,49 @@
+<?php
+/**
+ * users.php
+ *
+ * User List Page
+ *
+ * Displays a table of all registered PubLink users, ordered alphabetically
+ * by last name. Each row includes the user's ID, username, first and last
+ * name, email address, and group membership.
+ *
+ * @author Chris Tomlinson
+ */
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\presentation\UserPresentation;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+    // Fetch all users with their group names, ordered alphabetically
+    // by last name. The explicit column aliases disambiguate `name`
+    // columns from both user_details and user_group.
+    $users = $page->getObjDB()->preparedStatement(
+        "SELECT user_details.id,
+                user_details.name  AS username,
+                first_name,
+                last_name,
+                email,
+                user_group.name    AS user_group
+           FROM user_details,
+                user_group
+          WHERE user_group_id = user_group.id
+          ORDER BY last_name",
+        []
+    );
+
+    $content .= UserPresentation::getUserListAsTable($users, $page->getObjDB());
+    $page->setHeading("Publink Users");
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>

@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<!DOCTYPE catalog PUBLIC "-//OASIS//DTD Entity Resolution XML Catalog V1.0//EN"
+  "http://www.oasis-open.org/committees/entity/release/1.0/catalog.dtd">
+<catalog xmlns="urn:oasis:names:tc:entity:xmlns:xml:catalog">
+
+  <!-- JATS 1.4 -->
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Article Tag Suite v1.4//EN"
+          uri="/var/www/xsd/1.4/JATS-journalpublishing1-4.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.4 20220601//EN"
+          uri="/var/www/xsd/1.4/JATS-journalpublishing1-4.dtd"/>
+  <rewriteURI uriStartString="https://jats.nlm.nih.gov/publishing/1.4/"
+              rewritePrefix="/var/www/xsd/1.4/"/>
+
+  <!-- JATS 1.3 -->
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Article Tag Suite v1.3//EN"
+          uri="/var/www/xsd/1.3/JATS-journalpublishing1-3.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.3 20210610//EN"
+          uri="/var/www/xsd/1.3/JATS-journalpublishing1-3.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.3//EN"
+          uri="/var/www/xsd/1.3/JATS-journalpublishing1-3.dtd"/>
+  <rewriteURI uriStartString="https://jats.nlm.nih.gov/publishing/1.3/"
+              rewritePrefix="/var/www/xsd/1.3/"/>
+
+  <!-- JATS 1.2 -->
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Article Tag Suite v1.2//EN"
+          uri="/var/www/xsd/1.2/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.2 20190208//EN"
+          uri="/var/www/xsd/1.2/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.2//EN"
+          uri="/var/www/xsd/1.2/JATS-journalpublishing1.dtd"/>
+  <rewriteURI uriStartString="https://jats.nlm.nih.gov/publishing/1.2/"
+              rewritePrefix="/var/www/xsd/1.2/"/>
+
+  <!-- JATS 1.1 -->
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Article Tag Suite v1.1//EN"
+          uri="/var/www/xsd/1.1/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.1 20151215//EN"
+          uri="/var/www/xsd/1.1/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.1//EN"
+          uri="/var/www/xsd/1.1/JATS-journalpublishing1.dtd"/>
+  <rewriteURI uriStartString="https://jats.nlm.nih.gov/publishing/1.1/"
+              rewritePrefix="/var/www/xsd/1.1/"/>
+
+  <!-- JATS 1.0 -->
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Article Tag Suite v1.0//EN"
+          uri="/var/www/xsd/1.0/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.0 20120330//EN"
+          uri="/var/www/xsd/1.0/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD JATS (Z39.96) Journal Publishing DTD v1.0//EN"
+          uri="/var/www/xsd/1.0/JATS-journalpublishing1.dtd"/>
+  <rewriteURI uriStartString="https://jats.nlm.nih.gov/publishing/1.0/"
+              rewritePrefix="/var/www/xsd/1.0/"/>
+
+  <!-- Legacy NLM DTD variants -->
+  <public publicId="-//NLM//DTD Journal Publishing DTD v3.0 20080202//EN"
+          uri="/var/www/xsd/1.0/JATS-journalpublishing1.dtd"/>
+  <public publicId="-//NLM//DTD Journal Publishing DTD v2.3 20070202//EN"
+          uri="/var/www/xsd/1.0/JATS-journalpublishing1.dtd"/>
+
+</catalog>

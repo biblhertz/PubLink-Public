@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="src/test/bootstrap.php"
+         colors="true">
+    <testsuites>
+        <testsuite name="PubLink Test Suite">
+            <file>src/test/UnitTest.php</file>
+            <file>src/test/LoggerTest.php</file>
+            <file>src/test/EncryptionTest.php</file>
+            <file>src/test/UtilitiesTest.php</file>
+            <file>src/test/XMLValidatorTest.php</file>
+            <file>src/test/AnnotationTest.php</file>
+            <file>src/test/OmTest.php</file>
+            <file>src/test/ArticleTest.php</file>
+            <file>src/test/ArticlePackageTest.php</file>
+            <file>src/test/ArticleOmMissingTest.php</file>
+            <file>src/test/AdapterTest.php</file>
+            <file>src/test/ReferenceApiAdapterTest.php</file>
+            <file>src/test/ComponentsTest.php</file>
+            <file>src/test/PagesTest.php</file>
+        </testsuite>
+    </testsuites>
+</phpunit>

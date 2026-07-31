@@ -1,0 +1,75 @@
+<?php
+/**
+ * imageFiles.php
+ *
+ * My Image Files Page
+ *
+ * Displays the current user's image files in a two-tab panel:
+ *
+ * - **Tab 0 (Image Files)** — Lists all standard image files owned by the
+ *   current user (JPEG, PNG, GIF, etc.), excluding JP2 files.
+ *
+ * - **Tab 1 (JP2 Files)** — Lists all JPEG 2000 (JP2) image files owned by
+ *   the current user. JP2 files are separated into their own tab because they
+ *   require a IIIF image server to display and cannot be streamed directly
+ *   by the application (see viewImage.php).
+ *
+ * Both lists are rendered as tables via {@see FilePresentation::getFileListAsTable()}.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\presentation\FilePresentation;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+
+$page = new Bibliotheca_Content_Page();
+
+try {
+
+    // ----------------------------------------------------------------
+    // Fetch the user's image files
+    //
+    // Standard images and JP2 files are fetched separately.
+    // The false argument to getMyImageFilesAsResultSet() excludes JP2
+    // files from the standard list, keeping the two tabs distinct.
+    // ----------------------------------------------------------------
+    $images  = $page->getUser()->getMyImageFilesAsResultSet(false); // excludes JP2
+    $images2 = $page->getUser()->getMyJp2FilesAsResultSet();
+
+    // ----------------------------------------------------------------
+    // Render each file list into its own card-body container.
+    // The shared container ID ("filecontainer") allows any external JS
+    // targeting that ID to work on whichever tab is active.
+    // ----------------------------------------------------------------
+    $icontent  = '<div class="card-body p-0" id="filecontainer">'
+               . FilePresentation::getFileListAsTable($images,  $page->getObjDB())
+               . '</div>';
+
+    $icontent2 = '<div class="card-body p-0" id="filecontainer">'
+               . FilePresentation::getFileListAsTable($images2, $page->getObjDB())
+               . '</div>';
+
+    // ----------------------------------------------------------------
+    // Build the tabbed panel
+    // ----------------------------------------------------------------
+    $panel = new BootstrapTabbedPanel();
+    $panel->setTitle("Image Files");
+    $panel->setName("uploadfile_panel");
+    $panel->setTabNames(["Image Files", "jp2 Files"]);
+    $panel->setTabContent([$icontent, $icontent2]);
+
+    $content = '<div class="card w-100">' . $panel->getComponent() . '</div>';
+
+    $page->setHeading("My Image Files");
+    $page->setCentralContent($content);
+
+} catch (Exception $e) {
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+?>

@@ -1,0 +1,210 @@
+<?php
+/**
+ * galleyFiles.php
+ *
+ * Galley File Manager Page
+ *
+ * Provides a two-tab interface for managing the galley files attached to a
+ * serialised Article object:
+ *
+ * - **Tab 0 (Existing Galleys)** — Lists all non-JATS galley files currently
+ *   attached to the article, with inline options to edit metadata or remove files.
+ *   The JATS XML galley filename is shown at the top for reference.
+ *
+ * - **Tab 1 (Upload Galley File)** — Provides a file upload form that posts to
+ *   `uploadGalleyService.php`, along with a genre selector. The selected genre
+ *   is passed alongside the uploaded file so it can be assigned immediately.
+ *
+ * Supports two pre-render mutation actions:
+ * - `updateGalley` — Updates metadata (name, alt text, genre, locale) for a
+ *   specific galley file identified by its JATS ID.
+ * - `removeGalley` — Removes a galley file (and any dependent children) from
+ *   the article by JATS ID.
+ *
+ * Required request parameters:
+ * - `oid` (int) — Serialised object ID of the article to manage. Throws if
+ *   absent or non-numeric.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\components\BootstrapFileUpload;
+use Biblhertz\Publink\om\File;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Article\om\presentation\GalleyFilePresentation;
+use Biblhertz\Article\om\presentation\ArticlePresentation;
+use Biblhertz\Publink\utilities\User_Session;
+use Biblhertz\Publink\om\SerializedObject;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+$openTab = 0;
+
+try {
+
+    // ----------------------------------------------------------------
+    // Load and deserialise the Article object
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['oid']) && is_numeric($_REQUEST['oid']))
+        $object = new SerializedObject($page->getObjDB(), $_REQUEST['oid']);
+    else
+        throw new Exception("Error :: No object ID is set or ID is not numeric");
+
+    $oid     = $_REQUEST['oid'];
+    $article = unserialize($object->getObject());
+
+    if (!is_a($article, "\Biblhertz\Article\om\Article"))
+        throw new Exception("Error :: Object Type supplied is not an Article <br/> Object is of type : ");
+
+    // ----------------------------------------------------------------
+    // Update galley file metadata
+    //
+    // Looks up the galley by JATS ID and applies posted form values
+    // (name, alt text, genre, locale). Persists the updated article.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['updateGalley'])) {
+        if (isset($_REQUEST['itemid'])) {
+            $galley = $article->getGalleyFileByJatsID($_REQUEST['itemid']);
+            if (is_a($galley, "Biblhertz\Article\om\GalleyFile")) {
+                $galley->updateGalley($_POST);
+                $object->updateObject($article);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Remove a galley file from the article
+    //
+    // Also removes any dependent child files attached to this galley.
+    // The JATS XML galley is protected and cannot be removed here.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['removeGalley'])) {
+        $article->removeGalleyFile($_REQUEST['itemid']);
+        $object->updateObject($article);
+    }
+
+    // ----------------------------------------------------------------
+    // Render the galley manager page
+    // ----------------------------------------------------------------
+    $page->setHeading($article->getTitle() . "<br/>Galley Files");
+    $content = "<a href=article.html?oid=$oid />Back</a><hr />";
+
+    // The JATS XML galley is displayed for reference but not editable here
+    $jatsFile = $article->getJATSXMLFile();
+
+    // ----------------------------------------------------------------
+    // Build the tabbed panel
+    //
+    // Tab 0: lists existing non-JATS galleys with edit/remove controls.
+    // Tab 1: file upload form + genre selector for adding new galleys.
+    //        The genre pulldown value is injected into the upload request
+    //        as an extra field so the service can assign it on receipt.
+    // ----------------------------------------------------------------
+    $panel              = new BootstrapTabbedPanel();
+    $articlepresentation = new ArticlePresentation($article);
+
+    // Render the existing galley list (excludes JATS XML and cover image files)
+    $galleyList = GalleyFilePresentation::getFileListAsTable(
+        $article->getNonJATSGalleyFiles(),
+        $page->getObjDB(),
+        true
+    );
+
+    $tabContent    = array();
+    $tabContent[0] = "<p>JATS XML Galley File :: <b>" . $jatsFile->getGalleyFileName() . "</b></p>"
+                   . '<div id="galley_list">' . $galleyList . '</div>';
+
+    // Upload tab: file uploader posts to the galley upload service;
+    // genre pulldown is read from the DOM at upload time via jQuery.
+    $tabContent[1] = '<div style="width:200">'
+                   . getFileUploadForm("services/uploadGalleyService.php")
+                   . getScripts()
+                   . '</div><hr/>'
+                   . '<div style="width:200">'
+                   . GalleyFilePresentation::getAllowedGenresAsPullDown("genre_pulldown", "Article Text", ["Dependant File"])
+                   . '</div>';
+
+    $panel->setTitle("Galley Files");
+    $panel->setName("uploadgalley_panel");
+    $panel->setTabNames(["Existing Galleys", "Upload Galley File"]);
+    $panel->setTabContent($tabContent);
+
+    $content .= $panel->getComponent();
+
+} catch (Exception $e) {
+    $page->setHeading("Exception Occurred");
+    $content = $e->getMessage();
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+
+/**
+ * Builds and returns a Bootstrap file upload component configured to post
+ * to the given service endpoint.
+ *
+ * The uploader is limited to a single file at a time. In addition to the
+ * file itself, it submits:
+ * - `galley_genre` — the value of `#genre_pulldown` at the time of upload,
+ *   read live from the DOM via a jQuery expression so the genre selected
+ *   by the user is always captured correctly.
+ * - `oid`          — the serialised object ID of the article, so the upload
+ *   service can locate the correct article to attach the file to.
+ *
+ * Uses the global `$page` and `$oid` variables from the outer scope.
+ *
+ * @param  string $address URL of the upload service endpoint
+ * @return string          HTML string of the rendered file upload component
+ */
+function getFileUploadForm(string $address): string
+{
+    global $page, $oid;
+
+    $fileName = "uploadFile";
+
+    $input = new BootstrapFileUpload();
+    $input->setName($fileName);
+    $input->setID($fileName);
+    $input->setTarget($address);
+    $input->setPage($page);
+    $input->setMaxFiles(1);
+
+    // Pass the genre pulldown value as a dynamic extra field.
+    // The jQuery expression is evaluated at upload time, not at form render time.
+    $input->addUploadItems([
+        'galley_genre' => "$('#genre_pulldown').val()",
+        'oid'          => $oid,
+    ]);
+
+    return $input->getComponent();
+}
+
+/**
+ * Returns an inline JavaScript snippet that handles the post-upload UI feedback.
+ *
+ * After a galley file is uploaded, `galleyUpload()` is called by the upload
+ * component's callback. It populates and displays a hidden modal to indicate
+ * that the upload is in progress, providing the user with visual confirmation
+ * without a full page reload.
+ *
+ * Note: `hidden_modal_func()` and `$('#hidden_modal')` are expected to be
+ * provided by the page wrapper component (`Bibliotheca_Content_Page`).
+ *
+ * @return string An HTML <script> block containing the galleyUpload function
+ */
+function getScripts(): string
+{
+    return '<script type="text/javascript">
+    async function galleyUpload(){
+        $("#hidden_modal_message").html("Galley File Upload");
+        $("#hidden_modal").draggable();
+        hidden_modal_func();
+    }
+</script>';
+}
+?>

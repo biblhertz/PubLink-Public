@@ -1,0 +1,85 @@
+<?php
+/**
+ * taskControl.php
+ *
+ * Task Control Panel
+ *
+ * Renders the current user's assigned tasks as individual tabs within a
+ * single tabbed panel, using the generic TaskPresentation for all task types.
+ *
+ * Unlike myTasks.php, which lays tasks out in a two-column grid and uses
+ * specialised presentation classes for certain task types, this page presents
+ * each task as its own named tab within a single "Task Control" panel. It is
+ * intended as a more compact, single-panel alternative interface.
+ *
+ * If a job queue message is passed via the request (e.g. after a background
+ * job completes), it is displayed as a modal alert on page load.
+ *
+ * Request parameters:
+ * - `message` (string, optional) — Job queue result message to display in a
+ *                                   modal alert on page load.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\om\presentation\TaskPresentation;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+
+    // ----------------------------------------------------------------
+    // Display a job queue message modal if one has been passed
+    // (e.g. after a background job completes or fails)
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['message'])) {
+        $alert = new Modal_Alert($page, "job_queue_message", $_REQUEST['message']);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+    }
+
+    // ----------------------------------------------------------------
+    // Build the task control panel
+    //
+    // Each task assigned to the current user becomes its own tab,
+    // labelled with the task name. All tasks use the generic
+    // TaskPresentation regardless of type, unlike myTasks.php which
+    // uses specialised presentations for certain task names.
+    // ----------------------------------------------------------------
+    $panel = new BootstrapTabbedPanel();
+    $panel->setTitle("Task Control");
+    $panel->setName("task_user_panel");
+    $panel->setTheme("info");
+
+    $headings   = array();
+    $tabContent = array();
+
+    $myTasks = $page->getUser()->getTasks();
+    $c       = 0;
+
+    foreach ($myTasks as $task) {
+        $taskpresentation = new TaskPresentation($task);
+        $tabContent[$c]   = $taskpresentation->renderTask($page->getUser());
+        $headings[$c]     = $task->getName();
+        $c++;
+    }
+
+    $panel->setTabNames($headings);
+    $panel->setTabContent($tabContent);
+
+    // Constrain the panel to half-width on larger screens (col-sm-6)
+    $content = '<div class="col-12 col-sm-6">' . $panel->getComponent() . '</div>';
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+?>

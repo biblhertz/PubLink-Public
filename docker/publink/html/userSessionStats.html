@@ -1,0 +1,188 @@
+<?php
+/**
+ * userSession.php
+ *
+ * User Session Statistics Page
+ *
+ * Displays a detailed breakdown of a single intranet session identified by
+ * its session ID. The page is split into two sections:
+ *
+ * - Session summary table — session ID, user link, first and last action
+ *   timestamps, IP address, browser client string, and a count of any
+ *   security breach attempts recorded during the session.
+ *
+ * - User actions table — a full chronological (descending) log of every
+ *   action recorded in the session, including the script called, the
+ *   deserialised request parameters, and the timestamp. Rows flagged as
+ *   security breach attempts are highlighted in red.
+ *
+ * Navigation links at the foot of the page return to the per-user usage
+ * page and the overall usage statistics page.
+ *
+ * Request parameters:
+ * - `sid` (string, required) — The session ID to display. Used directly in
+ *                              prepared statements and the page heading.
+ *
+ * @author Chris Tomlinson
+ *
+ * @todo Validate / sanitise $_GET['sid'] before use (currently unvalidated).
+ * @todo Replace inline HTML table construction with a presentation class,
+ *       consistent with the rest of the codebase.
+ * @todo Fix undefined variable: `$unserialize` should be `unserialize`.
+ * @todo The `else $str.="<td></td></tr>"` branch appends an extra empty cell
+ *       outside the opening <tr>, producing malformed HTML when params is
+ *       absent — review table structure in the actions loop.
+ */
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Publink\pages\htmlPage;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+    $sid = $_GET['sid'];
+
+    $page->setHeading("User Session Statistics :: " . $sid);
+
+    // ----------------------------------------------------------------
+    // Resolve the session and its owner
+    //
+    // Fetch the first log entry for this session to obtain the owning
+    // user's ID and the client string recorded at login.
+    // ----------------------------------------------------------------
+    $session = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT * FROM user_intranet_log WHERE user_session_id = ? ORDER BY id",
+            [$sid]
+        )
+        ->fetch();
+
+    $user = new User($page->getObjDB(), $session['user_details_id']);
+
+    // ----------------------------------------------------------------
+    // Session summary table
+    // ----------------------------------------------------------------
+    $str  = '<table class="table table-bordered">';
+    $str .= '<tr><th>Session ID</th><td>' . $sid . '</td></tr>';
+    $str .= '<tr><th>User</th><td>'
+          . htmlPage::makeLink("user.html?uid=" . $user->getID(), $user->getName())
+          . '</td></tr>';
+
+    // First action: earliest timestamp for this session
+    $first = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT timestamp FROM user_intranet_log
+              WHERE user_session_id = ?
+              ORDER BY timestamp ASC",
+            [$sid]
+        )
+        ->fetch();
+    $firstTs = htmlPage::getTimeStampAsDateTimeArray($first['timestamp']);
+    $str .= '<tr><th>First Action</th><td>' . $firstTs[0] . ' at ' . $firstTs[1] . '</td></tr>';
+
+    // Last action: latest timestamp for this session
+    $last = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT timestamp FROM user_intranet_log
+              WHERE user_session_id = ?
+              ORDER BY timestamp DESC",
+            [$sid]
+        )
+        ->fetch();
+    $lastTs = htmlPage::getTimeStampAsDateTimeArray($last['timestamp']);
+    $str .= '<tr><th>Last Action</th><td>' . $lastTs[0] . ' at ' . $lastTs[1] . '</td></tr>';
+
+    // IP address: first distinct address recorded for this session
+    $ipRow = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT DISTINCT(ip_address) FROM user_intranet_log WHERE user_session_id = ?",
+            [$sid]
+        )
+        ->fetch();
+    $str .= '<tr><th>IP Address</th><td>' . $ipRow['ip_address'] . '</td></tr>';
+
+    $str .= '<tr><th>Client</th><td>' . $session['client'] . '</td></tr>';
+
+    // Security breach count: number of log entries flagged as breaches
+    $breaches = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT security_breach FROM user_intranet_log
+              WHERE user_session_id = ?
+                AND security_breach = 1",
+            [$sid]
+        );
+    $str .= '<tr><th>Security Breach Attempts</th><td>' . $breaches->rowCount() . '</td></tr>';
+    $str .= '</table>';
+
+    $content .= $str;
+
+    // ----------------------------------------------------------------
+    // User actions table
+    //
+    // Lists every action in the session in descending timestamp order.
+    // Rows with security_breach = 1 are highlighted in red.
+    // Stored request parameters are deserialised and rendered as
+    // key = value pairs, excluding the PHPSESSID key and any nested
+    // arrays.
+    // ----------------------------------------------------------------
+    $actions = $page->getObjDB()
+        ->preparedStatement(
+            "SELECT script, params, timestamp, security_breach
+               FROM user_intranet_log
+              WHERE user_session_id = ?
+              ORDER BY timestamp DESC",
+            [$sid]
+        );
+
+    $str = '<h3>User Actions</h3><table class="table table-bordered">';
+
+    while ($d = $actions->fetch()) {
+        $ts        = htmlPage::getTimeStampAsDateTimeArray($d['timestamp']);
+        $rowStyle  = ($d['security_breach'] == 1) ? ' style="background-color:#eeaaaa;"' : '';
+
+        $str .= '<tr' . $rowStyle . '>'
+              . '<td>' . $ts[0] . ' @ ' . $ts[1] . '</td>'
+              . '<td>' . $d['script'] . '</td>'
+              . '<td>';
+
+        if (isset($d['params'])) {
+            // NOTE: $unserialize in the original is a bug — should be unserialize()
+            $arr = unserialize($d['params']);
+            $s   = "";
+            if (is_array($arr)) {
+                foreach ($arr as $key => $value) {
+                    // Skip nested arrays and the PHP session ID key
+                    if (!is_array($key) && !is_array($value) && strcmp($key, "PHPSESSID")) {
+                        $s .= $key . " = " . $value . "<br/>";
+                    }
+                }
+            }
+            $str .= $s;
+        }
+
+        $str .= '</td></tr>';
+    }
+
+    $str .= '</table>';
+
+    $content .= $str;
+
+    // Navigation links
+    $content .= '<br/><p>'
+              . $page->makeLink("userUsage.html?pid=" . $user->getID(), "Back to Usage for " . $user->getName())
+              . ' | '
+              . $page->makeLink("userStats.html", "Back to Usage Statistics")
+              . '</p>';
+
+} catch (Exception $e) {
+    $page->handleException($e);
+    exit(1);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>

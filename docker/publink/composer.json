@@ -1,0 +1,66 @@
+{
+    "name": "biblhertz/publink",
+    "description": "Publication linking and citation service for Bibliotheca Hertziana",
+    "type": "library",
+    "repositories": [
+        {
+            "type": "package",
+            "package": {
+                "name": "citation-style-language/locales",
+                "version": "1.0.0",
+                "source": {
+                    "type": "git",
+                    "url": "https://github.com/citation-style-language/locales.git",
+                    "reference": "master"
+                }
+            }
+        },
+        {
+            "type": "package",
+            "package": {
+                "name": "citation-style-language/styles",
+                "version": "1.0.0",
+                "source": {
+                    "type": "git",
+                    "url": "https://github.com/citation-style-language/styles.git",
+                    "reference": "master"
+                }
+            }
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "pda/pheanstalk": "^4.0",
+        "guzzlehttp/guzzle": "^6.2",
+        "renanbr/crossref-client": "^1.0",
+        "renanbr/bibtex-parser": "^2.0",
+        "seboettg/collection": "^3.1",
+        "citation-style-language/locales":"@dev",
+        "citation-style-language/styles":"@dev",
+        "seboettg/citeproc-php": "^2",
+		"phpunit/phpunit": "^12.0"
+
+    },
+    "autoload": {
+        "psr-4": {
+            "Biblhertz\\Publink\\": "src/",
+            "Biblhertz\\Article\\": "src/article/src/"
+        },
+        "classmap": [
+            "src/article/src/adapters/"
+        ]
+    },
+    "authors": [
+        {
+            "name": "Chris Tomlinson",
+            "email": "christopher.tomlinson@biblhertz.it"
+        }
+    ],
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "policy": {
+        "advisories": {
+            "block": false
+        }
+    }
+}

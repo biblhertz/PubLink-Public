@@ -1,0 +1,163 @@
+<?php
+/**
+ * myTasks.php
+ *
+ * Task Interface Page
+ *
+ * Renders the current user's assigned task widgets, or a task selection form
+ * if the user wants to change which tasks they have active.
+ *
+ * The page operates in three modes depending on the request:
+ *
+ * 1. **Job queue message** (`message`) — Displays a modal alert with a message
+ *    from the job queue (e.g. a completed or failed background job). The task
+ *    that triggered the message is highlighted in the rendered task list.
+ *
+ * 2. **Task selection** (`choose`) — Renders a form allowing the user to select
+ *    which tasks appear on their task interface, via {@see UserPresentation::getTasksAsForm()}.
+ *
+ * 3. **Update tasks** (`updateTasks`) — Saves the user's updated task selections
+ *    submitted from the task selection form.
+ *
+ * 4. **Default (task list)** — Renders all tasks assigned to the current user
+ *    as a two-column grid of task widgets. Each task is rendered by the
+ *    appropriate presentation class:
+ *    - `CreateArticlePresentation` — for "Create Article" and "JATS to OJS XML Converter" tasks.
+ *    - `TaskPresentation`          — for all other task types.
+ *
+ * If the user has no tasks assigned, a guidance message is shown instead.
+ *
+ * Request parameters:
+ * - `message`     (string, optional) — Job queue message to display in a modal.
+ *   - `task_id`   (int, required)    — ID of the task that generated the message;
+ *                                      used to highlight that task in the list.
+ * - `choose`      (any, optional)    — Triggers the task selection form.
+ * - `updateTasks` (any, optional)    — Triggers saving of task selections.
+ *   - `task`      (array, required)  — POST array of selected task IDs.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\om\presentation\TaskPresentation;
+use Biblhertz\Publink\om\presentation\CreateArticlePresentation;
+use Biblhertz\Publink\om\presentation\UserPresentation;
+
+$page = new Bibliotheca_Content_Page();
+$page->setHeading("Task Interface");
+
+try {
+
+    // $taskId holds the ID of the task associated with a job queue message,
+    // used below to pass a highlight flag to the relevant task presentation.
+    $taskId = false;
+
+    // ----------------------------------------------------------------
+    // Display a job queue message modal
+    //
+    // When a background job completes or fails, it can redirect back to
+    // this page with a message and the ID of the triggering task.
+    // The modal opens automatically on page load.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['message'])) {
+        $alert = new Modal_Alert($page, "job_queue_message", $_REQUEST['message']);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+        $taskId = $_REQUEST['task_id'];
+
+    // ----------------------------------------------------------------
+    // Save updated task selections
+    //
+    // Submitted from the task selection form (choose mode).
+    // Updates which tasks are assigned to the current user.
+    // ----------------------------------------------------------------
+    } else if (isset($_REQUEST['updateTasks'])) {
+        $page->getUser()->updateTasks($_POST['task']);
+    }
+
+    $content = "";
+
+    // ----------------------------------------------------------------
+    // Mode: task selection form
+    //
+    // Renders a form listing all available tasks with checkboxes,
+    // allowing the user to choose which tasks appear on their interface.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['choose'])) {
+        $presentation = new UserPresentation($page->getUser());
+        $content      = $presentation->getTasksAsForm("myTasks.html");
+
+    // ----------------------------------------------------------------
+    // Mode: task list (default)
+    //
+    // Renders each of the user's assigned tasks as a widget in a
+    // two-column Bootstrap grid. Tasks are laid out in pairs of rows:
+    // - Even-indexed tasks open a new <div class="row">
+    // - Odd-indexed tasks close it
+    //
+    // The presentation class is selected by task name:
+    // - "Create Article" and "JATS to OJS XML Converter" use
+    //   CreateArticlePresentation for their specialised UI.
+    // - All other tasks use the generic TaskPresentation.
+    //
+    // If the current page load was triggered by a job queue message,
+    // the matching task is passed a highlight flag (true) so it can
+    // visually indicate the result to the user.
+    // ----------------------------------------------------------------
+    } else {
+        $myTasks = $page->getUser()->getTasks();
+        $c       = 0;
+
+        foreach ($myTasks as $task) {
+
+            // Select the appropriate presentation class for this task type
+            switch ($task->getName()) {
+                case "Create Article":
+                case "JATS to OJS XML Converter":
+                    $presentation = new CreateArticlePresentation(
+                        $task,
+                        $taskId == $task->getID() // highlight if this task triggered the message
+                    );
+                    break;
+
+                default:
+                    $presentation = new TaskPresentation(
+                        $task,
+                        $taskId == $task->getID()
+                    );
+                    break;
+            }
+
+            // Open a new row for every even-indexed task (0, 2, 4 ...)
+            if ($c % 2 == 0) $content .= '<div class="row">';
+
+            $content .= '<div class="col-6">' . $presentation->renderTask($page->getUser()) . '</div>';
+
+            // Close the row after every odd-indexed task (1, 3, 5 ...)
+            if ($c % 2 == 1) $content .= '</div>';
+
+            $c++;
+        }
+
+        // If the user has no tasks assigned, show a guidance message
+        if ($c == 0) {
+            $content .= "You are currently not able to perform any tasks. "
+                      . "Choose some tasks using the choose option in the left hand menu";
+        }
+    }
+
+    // Wrap all content in a Bootstrap container
+    $content = '<div class="container">' . $content . '</div>';
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>

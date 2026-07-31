@@ -1,0 +1,227 @@
+<?php
+/**
+ * referenceCollection.php
+ *
+ * Reference Collection Viewer Page
+ *
+ * Displays a standalone ReferenceCollection object, providing export options,
+ * a reference check trigger, and a scrollable list of all references.
+ *
+ * The page handles several actions before rendering:
+ *
+ * **Export actions** (stream a file and exit):
+ * - `getAsBibtex`    — Exports all references as a `.bib` BibTeX file.
+ * - `getAsJATS`      — Exports all references as a JATS XML fragment file.
+ * - `getAsDataCite`  — Exports all references as a DataCite XML file.
+ *
+ * **Utility actions** (run and then render):
+ * - `getReferenceFromDOI` — Looks up a specific reference by label within the
+ *   collection and runs a CrossRef DOI check on it. Outputs progress directly
+ *   to the browser (not wrapped in the page template). Writes a user log file.
+ * - `refkey`              — When present, injects a JS scroll function that
+ *   auto-scrolls to the matching reference element after page load.
+ * - `message`             — Displays a job queue result modal on page load.
+ *
+ * **Reference check button**:
+ * If the collection has not yet been reference-checked, and the "New Reference
+ * Checker" task exists in the database, a check button is rendered above the
+ * reference list. If checking is already complete the button is suppressed.
+ *
+ * Required request parameters:
+ * - `oid` (int, required) — Serialised object ID of the ReferenceCollection.
+ *                           Throws if absent, non-numeric, or not a ReferenceCollection.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\htmlPage;
+use Biblhertz\Publink\om\SerializedObject;
+use Biblhertz\Article\om\presentation\ReferenceCollectionPresentation;
+use Biblhertz\Article\adapters\OMToDataCiteAdapter;
+use Seboettg\CiteProc\StyleSheet;
+use Seboettg\CiteProc\CiteProc;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+
+    // ----------------------------------------------------------------
+    // Load and validate the serialised ReferenceCollection object
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['oid']) && is_numeric($_REQUEST['oid'])) {
+        $oid    = $_REQUEST['oid'];
+        $object = new SerializedObject($page->getObjDB(), $oid);
+    } else {
+        throw new Exception("Error :: No object ID is set or ID is not numeric");
+    }
+
+    $collection = unserialize($object->getObject());
+
+    if (!is_a($collection, "\Biblhertz\Article\om\ReferenceCollection"))
+        throw new Exception("Error :: Object Type supplied is not an Reference Collection");
+
+    // ----------------------------------------------------------------
+    // Display a job queue message modal (e.g. after a background check completes)
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['message'])) {
+        $alert = new Modal_Alert($page, "job_queue_message", $_REQUEST['message']);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+        $taskId = $_REQUEST['task_id'];
+    }
+
+    // ----------------------------------------------------------------
+    // CrossRef DOI lookup for a single reference
+    //
+    // Finds the reference by label, runs a CrossRef API check, and
+    // outputs progress text directly to the browser (not page-wrapped).
+    // Results are also written to the user's log file for later review.
+    //
+    // Note: output is raw HTML echoed inline — this action does not exit,
+    // so the page will continue to render below the output.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getReferenceFromDOI'])) {
+        $logger = new Logger();
+        $ref    = $collection->getByLabel($_REQUEST['label']);
+
+        if ($ref) {
+            $logger->print("Got Reference " . $ref->getLabel() . " :: " . $ref->getTitle());
+            echo "Got Reference " . $ref->getLabel() . " :: " . $ref->getTitle();
+        } else {
+            $logger->print("Could not find reference requested in collection");
+            echo "<hr/>Could not find reference requested in collection";
+        }
+
+        if ($ref) {
+            $ref->getCrossRefFromPubID($logger);
+            echo "<hr/>Completed CrossRefCheck";
+            echo "<hr/>" . $ref->getDOIMatch() . "<hr/>";
+        }
+
+        $logger->writeOutUserLogFile("single_user_request", $page->getUser());
+    }
+
+    // ----------------------------------------------------------------
+    // Export: BibTeX (.bib)
+    // Iterates all references and concatenates their BibTeX representations.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsBibtex'])) {
+        $refs = $collection->getReferences();
+        $str  = "This bibtex file was created by PubLink\n\n";
+        foreach ($refs as $ref) {
+            $str .= "\n\n" . $ref->getBibtexReference();
+        }
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.bib"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: JATS XML fragment
+    // Iterates all references and concatenates their JATS representations.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsJATS'])) {
+        $refs = $collection->getReferences();
+        $str  = "This JATS reference file was created by PubLink\n\n";
+        foreach ($refs as $ref) {
+            $str .= "\n\n" . $ref->getJATSReference();
+        }
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.xml"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: DataCite XML
+    // Passes the full reference collection to the DataCite adapter.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsDataCite'])) {
+        $omToDC = new OMToDataCiteAdapter($collection->getReferences(), "");
+        $str    = $omToDC->generateXML();
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.xml"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Scroll-to-reference JS
+    //
+    // When `refkey` is set (e.g. after returning from the reference detail
+    // page), injects a scroll function that animates to the matching
+    // reference row element after page load. If no refkey is set, a
+    // no-op function is injected to avoid JS errors in components that
+    // call scrollFunc().
+    // ----------------------------------------------------------------
+    $updateRef = 'null';
+    if (isset($_REQUEST['refkey'])) $updateRef = $_REQUEST['refkey'];
+
+    $content .= "<script>
+        async function scrollFunc(){
+            if(\$(\"#$updateRef\").length > 0) {
+                \$('html, body').animate({
+                    scrollTop: parseInt(\$(\"#$updateRef\").offset().top)
+                }, 900, 'swing');
+            }
+        }
+    </script>";
+
+    // ----------------------------------------------------------------
+    // Render the reference collection page
+    // ----------------------------------------------------------------
+    $page->setHeading("Reference Collection");
+
+    // Export and utility toolbar
+    $content .= "<p>" . htmlPage::makeLink("referenceCollection.html?oid=" . $object->getID() . "&&getAsBibtex=true",   "Get Bibtex References");
+    $content .= " | " . htmlPage::makeLink("referenceCollection.html?oid=" . $object->getID() . "&&getAsJATS=true",     "Get JATS References");
+    $content .= " | " . htmlPage::makeLink("referenceCollection.html?oid=" . $object->getID() . "&&getAsDataCite=true", "Get DataCite References");
+    $content .= " | " . htmlPage::makeLink("referenceCollection.html?oid=" . $object->getID() . "&&sortReferences=true","Sort References");
+
+    $presentation = new ReferenceCollectionPresentation($collection);
+
+    // ----------------------------------------------------------------
+    // Reference check button
+    //
+    // Only shown if the collection hasn't been checked yet and the
+    // "New Reference Checker" task is configured in the database.
+    // The task's action_handler and ID are passed to the button so it
+    // can enqueue the job with the correct handler when clicked.
+    // ----------------------------------------------------------------
+    if (!$collection->getReferenceCheck()) {
+        $task = $page->getObjDB()->preparedSelect(
+            "select * from task where name = ?",
+            array('New Reference Checker')
+        );
+        if ($page->getObjDB()->numRows() == 1) {
+            $task   = $task->fetch();
+            $button = $presentation->getReferenceCheckButton($task['action_handler'], $oid, $task['id']) . "<hr/>";
+        }
+    } else {
+        $button = ""; // reference check already complete — suppress the button
+    }
+
+    $content .= $button . $presentation->getAllReferencePanel($oid);
+
+} catch (Exception $e) {
+    $page->setCentralContent($e->getMessage());
+}
+
+$page->setCentralContent('<div class="col-12">' . $content . '</div>');
+echo $page->getPage();
+
+?>

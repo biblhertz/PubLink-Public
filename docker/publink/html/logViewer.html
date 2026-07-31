@@ -1,0 +1,225 @@
+<?php
+/**
+ * logs.php
+ *
+ * System Log Viewer Page
+ *
+ * Provides an admin-facing tabbed interface for monitoring application logs
+ * and the job queue in near-real-time. All tab content is loaded
+ * asynchronously via `logService.php` on page load and on demand via a
+ * Refresh button.
+ *
+ * Tabs:
+ * - **PHP Error Log**     — Displays the current PHP error log output.
+ * - **Live Jobs**         — Lists all currently active jobs in the queue.
+ * - **Completed Jobs**    — Lists all completed/archived jobs.
+ * - **Job Queue Log**     — Displays the job queue's own log output.
+ *
+ * Also handles two admin-only actions before rendering:
+ * - `logFile`   — Streams a job log file as a downloadable attachment.
+ * - `removeJob` — Archives a job with an admin removal note.
+ *
+ * Both actions are restricted to admin users. Non-admins making these
+ * requests are silently ignored (no error is shown).
+ *
+ * Required permissions: admin role required for `logFile` and `removeJob`.
+ *
+ * Request parameters:
+ * - `logFile`   (any, optional) — Triggers log file download.
+ *   - `jobId`   (int, required) — ID of the job_log record to download.
+ * - `removeJob` (any, optional) — Triggers job archival.
+ *   - `jobId`   (int, required) — ID of the job to archive.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\om\JobQueue;
+use Biblhertz\Publink\om\Job;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+
+    // ----------------------------------------------------------------
+    // Admin action: download a job log file
+    //
+    // Streams the log file to the browser and exits. Non-admin requests
+    // are silently ignored. The file is served regardless of extension
+    // as a plain text attachment.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['logFile'])) {
+        if ($page->getUser()->isAdmin()) getLogFileDownload($_REQUEST['jobId']);
+        exit;
+
+    // ----------------------------------------------------------------
+    // Admin action: remove (archive) a job from the queue
+    //
+    // Marks the job as archived with a note indicating admin removal.
+    // Non-admin requests are silently ignored.
+    // ----------------------------------------------------------------
+    } else if (isset($_REQUEST['removeJob'])) {
+        if ($page->getUser()->isAdmin()) {
+            $job = new Job($page->getObjDB(), $_REQUEST['jobId']);
+            $job->archiveError("Job removed by admin");
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Build the log viewer UI
+    // ----------------------------------------------------------------
+
+    // Refresh button — triggers a manual reload of all log panels via JS
+    $content = '<p class="m3"><button class="btn btn-outline-primary" id="refreshId">Refresh Logs</button></p>';
+
+    // Four-tab panel; each tab contains a named container div that is
+    // populated asynchronously by logService.php via getLog() below.
+    $tabbedPanel = new BootstrapTabbedPanel();
+    $tabbedPanel->setName("logPanel");
+
+    $headings   = array();
+    $tabContent = array();
+
+    $headings[0]   = "PHP Error Log";
+    $tabContent[0] = '<div class="w-100"><ul id="log" class="container"></ul></div>';
+
+    $headings[1]   = "Live Jobs";
+    $tabContent[1] = '<div id="all_jobs" class="table-responsive w-100"></div>';
+
+    $headings[2]   = "Completed Jobs";
+    $tabContent[2] = '<div id="all_completed_jobs" class="table-responsive w-100"></div>';
+
+    $headings[3]   = "Job Queue Log";
+    $tabContent[3] = '<div class="w-100"><ul id="log3"></ul></div>';
+
+    $tabbedPanel->setTabNames($headings);
+    $tabbedPanel->setTabContent($tabContent);
+    $tabbedPanel->setOpenTab(0);
+
+    $content .= '<div class="w-100">' . $tabbedPanel->getComponent() . '</div>';
+
+    // Inject on-load scripts that immediately populate each tab by calling
+    // logService.php with the appropriate type parameter.
+    $content .= getLog("type=allJobs",          "all_jobs")
+              . getLog("type=allCompletedJobs",  "all_completed_jobs")
+              . getLog("type=PHP",               "log")
+              . getLog("type=jobQueue",          "log3");
+
+    // Build the refresh function body: all four AJAX calls concatenated.
+    // Bound to the Refresh button click so all panels reload simultaneously.
+    $func = getFunc("type=allJobs",         "all_jobs")
+          . getFunc("type=allCompletedJobs","all_completed_jobs")
+          . getFunc("type=PHP",             "log")
+          . getFunc("type=jobQueue",        "log3");
+
+    $content .= "<script>
+        \$('#refreshId').click(function(){
+            $func;
+        });
+    </script>";
+
+    $page->setHeading("Log Information");
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+
+/**
+ * Generates an inline script that populates a log panel on document ready.
+ *
+ * Wraps {@see getFunc()} in a `$(document).ready()` handler so the named
+ * div is populated as soon as the page finishes loading, without requiring
+ * user interaction.
+ *
+ * @param  string $params Query string parameters to pass to logService.php
+ *                        (e.g. `"type=PHP"`)
+ * @param  string $div    ID of the container element to inject the response into
+ * @return string         An HTML <script> block
+ */
+function getLog(string $params, string $div): string
+{
+    $func = getFunc($params, $div);
+
+    return "<script>
+    \$(document).ready(function(){
+        $func;
+    });
+    </script>";
+}
+
+
+/**
+ * Generates a jQuery AJAX call that fetches log content from logService.php
+ * and injects the HTML response into the specified container element.
+ *
+ * Returns only the raw function call string (no script tags) so it can be
+ * composed with other calls — for example, concatenated into a single
+ * Refresh button handler that reloads all panels at once.
+ *
+ * @param  string $params Query string parameters to pass to logService.php
+ *                        (e.g. `"type=allJobs"`)
+ * @param  string $div    ID of the container element to inject the response into
+ * @return string         A raw JavaScript jQuery AJAX call (no script tags)
+ */
+function getFunc(string $params, string $div): string
+{
+    return "$.ajax({
+        url:  './services/logService.php?$params',
+        type: 'POST',
+        success: function(data){
+            \$('#$div').html(data);
+        }
+    });";
+}
+
+
+/**
+ * Streams a job log file to the browser as a downloadable text attachment.
+ *
+ * Looks up the log file path from the `job_log` table by the given job ID.
+ * If the record does not exist or the file is not present on disk, the
+ * function returns silently without outputting anything.
+ *
+ * Note: `filetype()` returns the filesystem type of the file (e.g. "file")
+ * rather than its MIME type. For a log file this is acceptable since browsers
+ * will treat it as a generic download, but replacing this with `mime_content_type()`
+ * would be more correct if serving varied file types.
+ *
+ * Uses the global `$page` for database access.
+ *
+ * @param  int|string $id The `job_log` record ID whose log file should be downloaded
+ * @return void
+ */
+function getLogFileDownload($id): void
+{
+    global $page;
+
+    $path = $page->getObjDB()->preparedGetOne(
+        "select log_file from job_log where id = ?",
+        array($id)
+    );
+
+    // Silently abort if the record or file does not exist
+    if (!isset($path) || !file_exists($path)) return;
+
+    $content = file_get_contents($path);
+
+    header("Pragma: ");
+    header("Cache-Control: public");
+    header("Content-Description: File Transfer");
+    header("Content-length: " . filesize($path));
+    header("Content-type: "   . filetype($path));   // note: returns fs type, not MIME type
+    header("Content-Disposition: attachment; filename=job_log_$id.txt");
+
+    echo $content;
+}
+
+?>

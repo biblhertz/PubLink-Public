@@ -1,0 +1,144 @@
+<?php
+/**
+ * myAnnotations.php
+ *
+ * My Annotations Page
+ *
+ * Serves two distinct purposes depending on the request parameters:
+ *
+ * 1. **Manifest endpoint** — When `manifest` and `canv` are present, generates
+ *    and returns a IIIF annotation manifest as a JSON response and exits.
+ *    This endpoint is intended to be called directly by a IIIF viewer (e.g. Mirador).
+ *
+ * 2. **Annotation list page** — When no `manifest` parameter is present, renders
+ *    an HTML page listing all annotations belonging to the current user, with
+ *    optional deletion support and a polling script to detect Mirador changes.
+ *
+ * Request parameters:
+ * - `manifest`         (string, optional) — Manifest URI; triggers JSON manifest output mode.
+ *   - `canv`           (string, required with manifest) — IIIF canvas URI for the manifest.
+ * - `deleteAnnotation` (any, optional)    — Triggers deletion of a specific annotation.
+ *   - `aid`            (int, required with deleteAnnotation) — ID of the annotation to delete.
+ *
+ * Throws an Exception if the current user does not have permission to delete
+ * the requested annotation.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\Config;
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\htmlPage;
+use Biblhertz\Publink\annotation\ImageAnnotation;
+use Biblhertz\Publink\annotation\ImageCanvas;
+use Biblhertz\Publink\annotation\ImageAnnotationPresentation;
+$page = new Bibliotheca_Content_Page();
+$page->setHeading("My Annotations");
+
+// ----------------------------------------------------------------
+// Manifest endpoint
+//
+// When 'manifest' and 'canv' are provided, build and return a IIIF
+// annotation manifest as JSON. This is called directly by Mirador
+// or other IIIF viewers rather than by a browser navigating the page.
+// No HTML page is rendered — the script exits after echoing the JSON.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['manifest'])) {
+    $icanvas = new ImageCanvas($page->getObjDB());
+    $icanvas->setCanvas($_REQUEST['canv']);
+    $icanvas->setManifest($_REQUEST['manifest']);
+    $icanvas->extractCanvasSizes();
+
+    $params = [
+        "user"    => $page->getUser()->getUserName(),
+        "uri"     => $_REQUEST['canv'],
+        "session" => $page->getUserSession()->getSessionIdentifier(),
+    ];
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo $icanvas->getAnnotationManifest($params);
+    exit;
+}
+
+// ----------------------------------------------------------------
+// Delete an annotation (optional pre-render action)
+//
+// Checks ownership before deleting. Throws if the current user
+// does not have permission to delete the requested annotation.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['deleteAnnotation'])) {
+    $annotation = new ImageAnnotation($page->getObjDB(), $_REQUEST['aid']);
+    if ($annotation->canDelete($page->getUser()->getID())) {
+        $annotation->deleteImageAnnotation($page->getUser()->getID());
+    } else {
+        throw new Exception("You do not have the rights to delete that annotation");
+    }
+}
+
+// ----------------------------------------------------------------
+// Render annotation list
+//
+// Fetches all annotations for the current user. If any exist, renders
+// them as a table; otherwise shows a placeholder message.
+// The list is wrapped in a named div so the Mirador polling script
+// can replace its contents without a full page reload.
+// ----------------------------------------------------------------
+$annotations = ImageAnnotation::getAnnotationListForUser(
+    $page->getUser()->getID(),
+    $page->getObjDB()
+);
+$numAnns = $page->getObjDB()->numRows();
+
+$content = $numAnns
+    ? ImageAnnotationPresentation::getCanvasAnnotationTable(
+        $annotations, $page->getObjDB(), $page->getUser()->getID(), true
+      )
+    : '<p class="text-muted small">No annotations found.</p>';
+
+// Wrap in a named container targeted by the Mirador polling script
+$content = '<div id="annotationListDiv">' . $content . '</div>';
+
+// Attach the polling script that refreshes the list when Mirador changes are detected
+$content .= miradorCheck();
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+
+/**
+ * Generates an inline JavaScript snippet that polls a server-side service
+ * every 3 seconds to check whether Mirador has added or modified an annotation
+ * for the current user.
+ *
+ * Unlike the canvas-specific version in annotationCanvas.php, this variant
+ * passes no canvas parameter — it checks across all of the user's annotations.
+ *
+ * If the service returns a non-empty response, the annotation list container
+ * (`#annotationListDiv`) is replaced with the updated HTML returned by the
+ * service, keeping the list in sync with changes made in Mirador without
+ * requiring a full page reload.
+ *
+ * @return string An HTML <script> block containing the polling function
+ */
+function miradorCheck(): string
+{
+    return '<script type="text/javascript">
+    function miradorCheck(){
+        var message = $.ajax({
+            type: "GET",
+            url: "services/checkAnnotationService.php",
+            async: false
+        }).responseText;
+
+        if(message !== ""){
+            $("#annotationListDiv").html(message);
+        }
+    }
+
+    // Poll every 3 seconds for Mirador-driven annotation changes
+    setInterval(miradorCheck, 3000);
+</script>';
+}
+?>

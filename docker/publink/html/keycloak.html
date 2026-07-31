@@ -1,0 +1,142 @@
+<?php
+/**
+ * keycloak.php
+ *
+ * Keycloak / ORCID OAuth2 Callback Handler
+ *
+ * Implements the OAuth2 authorisation code flow for authenticating users via
+ * the Bibliotheca Hertziana Keycloak server, which is configured to broker
+ * ORCID identity. This page acts as the OAuth2 redirect URI and handles
+ * both legs of the flow:
+ *
+ * 1. **Authorisation redirect** — If no `code` parameter is present, the user
+ *    is redirected to the Keycloak authorisation endpoint to begin the login.
+ *
+ * 2. **Callback handling** — When Keycloak redirects back with a `code`, the
+ *    code is exchanged for an access token, the user's profile is retrieved,
+ *    and login is completed via {@see Login::keyCloakLogin()}.
+ *
+ *    On success, a JavaScript snippet closes this popup window and reloads the
+ *    opener tab to `profile.html?login=true`. This page is expected to be
+ *    opened in a popup by the main application.
+ *
+ *    On failure, `loginFail` is set in the request (currently unused — the
+ *    commented-out modal block below would handle it).
+ *
+ * Note: CSRF state validation is not currently active — the state is generated
+ * but not stored or verified on callback. This should be addressed before
+ * deploying to a production environment.
+ *
+ * Note: Several blocks are commented out — local email login and the login
+ * failure modal — left from an earlier version of this page that also handled
+ * local authentication. These can be safely removed if no longer needed.
+ *
+ * OAuth2 configuration:
+ * - Server:   https://keycloak.biblhertz.it
+ * - Realm:    Biblhertz-ORCID
+ * - Client:   PublinkClient
+ * - Redirect: https://publink.humanitiesconnect.pub/keycloak.html
+ *
+ * GET parameters (set by Keycloak on callback):
+ * - `code`  (string) — Authorisation code to exchange for an access token.
+ * - `state` (string) — OAuth2 state value (currently not verified).
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\Config;
+use Stevenmaguire\OAuth2\Client\Provider\Keycloak;
+use Biblhertz\Publink\utilities\Login;
+
+// Instantiate in guest mode (1) — unauthenticated users must be able to
+// reach this callback page without being redirected to the login page.
+$page = new Bibliotheca_Content_Page(1);
+
+// ----------------------------------------------------------------
+// Configure the Keycloak OAuth2 provider
+//
+// The client secret is loaded from the application config rather than
+// hardcoded. Encryption options (RS256 key) are available but not
+// currently required by this realm configuration.
+// ----------------------------------------------------------------
+$provider = new Keycloak([
+    'authServerUrl' => 'https://keycloak.biblhertz.it',
+    'realm'         => 'Biblhertz-ORCID',
+    'clientId'      => 'PublinkClient',
+    'clientSecret'  => Config::$KEYCLOAK_CLIENT_SECRET,
+    'redirectUri'   => 'https://publink.humanitiesconnect.pub/keycloak.html',
+    'version'       => '21.0.2',
+    // 'encryptionAlgorithm' => 'RS256',            // optional: enable if realm uses signed tokens
+    // 'encryptionKeyPath'   => '../key.pem',       // optional: path to public key
+    // 'encryptionKey'       => 'key_contents',     // optional: inline key/certificate
+]);
+
+// ----------------------------------------------------------------
+// Leg 1: No authorisation code — initiate the OAuth2 flow
+//
+// Generate the Keycloak authorisation URL and redirect the user.
+// The state value is generated here but not yet stored in the session
+// for CSRF verification on callback — this should be implemented.
+// ----------------------------------------------------------------
+if (!isset($_GET['code'])) {
+    $keycloak = $provider->getAuthorizationUrl();
+    $state    = $provider->getState(); // TODO: store in $_SESSION for CSRF validation on callback
+
+    header("Location: $keycloak");
+    exit;
+}
+
+// ----------------------------------------------------------------
+// Leg 2: Authorisation code received — complete the OAuth2 flow
+// ----------------------------------------------------------------
+if (isset($_GET['code'])) {
+
+    // Step 1: Exchange the authorisation code for an access token
+    try {
+        error_log("KeyCloak :: Trying to get token with code :: " . $_GET['code']);
+
+        $code  = trim($_GET['code']);
+        $token = $provider->getAccessToken('authorization_code', ['code' => $code]);
+
+        error_log('Token is :: ' . $token);
+
+    } catch (Exception $e) {
+        exit('Failed to get access token: ' . $e->getMessage());
+    }
+
+    // Step 2: Use the access token to retrieve the authenticated user's profile,
+    // then pass it to the application login handler.
+    //
+    // On success: close this popup and reload the opener to the profile page.
+    //             The login=true flag allows the profile page to perform any
+    //             first-login initialisation steps.
+    // On failure: set loginFail in the request (modal handling is commented out below).
+    try {
+        error_log('Trying to get user with token');
+
+        $user = $provider->getResourceOwner($token);
+        $auth = Login::keyCloakLogin($user->toArray(), $page, $token);
+
+        if (!$auth) {
+            // Authentication failed — flag it for error display
+            $_REQUEST['loginFail'] = true;
+        } else {
+            // Success: close the popup and navigate the opener window to the profile page.
+            // window.opener refers to the tab that launched this popup.
+            echo '<script>
+                window.opener.location.href = "profile.html?login=true";
+                window.close();
+            </script>';
+            exit;
+        }
+
+    } catch (Exception $e) {
+        exit('Failed to get resource owner: ' . $e->getMessage());
+    }
+}
+
+?>

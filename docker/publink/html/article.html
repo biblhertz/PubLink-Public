@@ -1,0 +1,638 @@
+<?php
+/**
+ * article.php
+ *
+ * Article Editor and Export Page
+ *
+ * Central page for viewing, editing, and exporting a serialised Article object.
+ * The article is loaded from the database by its serialised object ID (`oid`),
+ * deserialised, and then one of many possible actions is performed depending on
+ * the request parameters present.
+ *
+ * The page operates in two broad modes:
+ *
+ * 1. **Export / download** — Several parameters trigger a file download and exit:
+ *    - `getAsOJS`       — Exports the article as an OJS-compatible XML file.
+ *    - `getAsJATSXML`   — Exports and validates the article as a JATS XML file.
+ *    - `getAsDataCite`  — Exports the article as a DataCite XML file.
+ *    - `getAsBibtex`    — Exports the article's references as a BibTeX file.
+ *    - `getAsHTML`      — Renders the article via the TEI Publisher API and outputs HTML.
+ *
+ * 2. **Edit / render** — All other parameters perform an in-place update and then
+ *    re-render the article editor panel:
+ *    - `removeObject`         — Removes a keyword or galley file from the article.
+ *    - `addObject`            — Adds a keyword or other item to the article.
+ *    - `saveSerializedObject` — Updates article scalar fields via reflection.
+ *    - `sortReferences`       — Sorts the reference collection alphabetically by label.
+ *    - `addGalleyFile`        — Attaches a file from the file store as a galley.
+ *    - `updateParagraph`      — Updates the text of an abstract paragraph.
+ *    - `updateAuthor`         — Updates an author's fields by JATS ID.
+ *    - `updateGalley`         — Updates a galley file's metadata.
+ *    - `removeGalley`         — Removes a galley file from the article.
+ *    - `changeJATS`           — Replaces the attached JATS XML file with a different file.
+ *    - `replaceJATS`          — Regenerates the JATS XML from the object model and replaces it.
+ *    - `addDependantGalleys`  — Attaches dependent image files to a parent galley.
+ *    - `refkey`               — Scrolls the page to a specific reference after render.
+ *    - `message`              — Displays a modal alert with a task queue message.
+ *
+ * Required request parameters:
+ * - `oid` (int) — ID of the SerializedObject to load. Throws if absent or non-numeric.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\Config;
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Bibliotheca_Page;
+use Biblhertz\Publink\pages\htmlPage;
+use Biblhertz\Publink\om\SerializedObject;
+use Biblhertz\Publink\om\File;
+use Biblhertz\Publink\utilities\Logger;
+use Biblhertz\Article\om\presentation\ArticlePresentation;
+use Biblhertz\Article\om\GalleyFile;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Article\adapters\OMToOJSArticleAdapter;
+use Biblhertz\Article\adapters\OMToJATSXMLArticleAdapter;
+use Biblhertz\Article\adapters\OMToDataCiteAdapter;
+use Biblhertz\Article\adapters\JATSXMLValidator;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+
+    // ----------------------------------------------------------------
+    // Load and deserialise the Article object
+    //
+    // The article is stored as a serialised PHP object in the database.
+    // Validate the object ID first to prevent unintended DB queries.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['oid']) && is_numeric($_REQUEST['oid']))
+        $object = new SerializedObject($page->getObjDB(), $_REQUEST['oid']);
+    else
+        throw new Exception("Error :: No object ID is set or ID is not numeric");
+
+    $article = unserialize($object->getObject());
+
+    if (!is_a($article, "\Biblhertz\Article\om\Article"))
+        throw new Exception("Error :: Object Type supplied is not an Article <br/> Object is of type : ");
+
+    // ----------------------------------------------------------------
+    // Display a task queue message if one has been passed
+    //
+    // Used by background job callbacks to surface completion or error
+    // messages to the user on their next page view.
+    // ----------------------------------------------------------------
+    $flashMsg = $page->getUserSession()->flash_message;
+    if ($flashMsg !== false && $flashMsg !== '') {
+        $page->getUserSession()->flash_message = '';
+        $alert = new Modal_Alert($page, "job_queue_message", $flashMsg);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+    }
+
+    // ----------------------------------------------------------------
+    // Article mutation actions
+    //
+    // Each branch modifies the article object and then persists it back
+    // to the database via $object->updateObject(). Only one branch runs
+    // per request (if/else if chain).
+    // ----------------------------------------------------------------
+
+    if (isset($_REQUEST['removeObject'])) {
+        // Remove a keyword or galley file identified by class type and JATS ID
+        $article->removeItem($_POST['classType'], $_POST['itemid']);
+        $object->updateObject($article);
+
+    } else if (isset($_REQUEST['addObject'])) {
+        // Add a new keyword or other typed item to the article
+        $article->addItem($_POST['classType'], $_POST);
+        $object->updateObject($article);
+
+    } else if (isset($_REQUEST['saveSerializedObject'])) {
+        // Update scalar article fields submitted from the editor form.
+        // Uses reflection internally to map POST keys to object properties.
+        // Reload the object after saving to ensure the presentation uses fresh data.
+        $object->updateReflectedObject($_POST);
+        $object          = new SerializedObject($page->getObjDB(), $_REQUEST['oid']);
+        $_REQUEST['tab'] = 1; // reopen the Metadata tab after save
+    } else if (isset($_REQUEST['sortReferences'])) {
+        // Sort the reference collection alphabetically by label
+        $article->getReferences()->sortByLabel();
+        $object->updateObject($article);
+        $_REQUEST['tab'] = 4; // open the references tab
+    } else if (isset($_REQUEST['addGalleyFile'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab after add
+        $_REQUEST['galleytab'] = 1; // open Galley Files sub-tab
+        // Attach a file from the file store as a galley file.
+        // Handles genre assignment, dependent file parent linking,
+        // and promotion of image galleys to cover image type.
+        if (isset($_POST['galley_file']) && is_numeric($_POST['galley_file'])) {
+            $file = new File($page->getObjDB(), $_POST['galley_file']);
+            if ($file->canEdit($page->getUser()->getID())) {
+                $galley = GalleyFile::getGalleyFile($file);
+                $galley->setArticle($article);
+
+                if (isset($_REQUEST['non_dependent_genre'])) {
+                    $galley->setGenre($_REQUEST['non_dependent_genre']);
+
+                    // If this is a dependent file, link it to its parent galley
+                    if (!strcmp($_REQUEST['non_dependent_genre'], GalleyFile::$DEPENDANT_GENRE)) {
+                        $parent = $article->getGalleyByFileID($_REQUEST['parent_galley_file']);
+                        if (isset($parent)) {
+                            $galley->setParent($parent->getJatsID());
+                        }
+                    }
+                }
+
+                // Promote an image galley to cover image type when the genre is Cover Image.
+                // Demote any existing cover image back to a plain image first.
+                if (
+                    !strcmp($_REQUEST['non_dependent_genre'], GalleyFile::$COVER_GENRE) &&
+                    !strcmp($file->getType(), 'image')
+                ) {
+                    $oldCover = $article->getCoverImageFile();
+                    if ($oldCover) $oldCover->setType(GalleyFile::$IMAGE);
+                    $galley->setType(GalleyFile::$COVER_IMAGE);
+                }
+
+                $article->addGalleyFile($galley);
+                $object->updateObject($article);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Scroll-to-reference: inject a JS scroll function for a specific ref
+    //
+    // When 'refkey' is set, the page will auto-scroll to the matching
+    // reference element after load. Otherwise a no-op function is injected
+    // to avoid JS errors in components that call scrollFunc().
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['refkey'])) {
+        $_REQUEST['tab'] = 4; // open the references tab
+        $updateRef       = preg_replace('/[^a-zA-Z0-9_-]/', '', $_REQUEST['refkey']);
+        $content .= '<script>
+            async function scrollFunc(){
+                if ($("#' . $updateRef . '").length > 0) {
+                    $("html, body").animate({
+                        scrollTop: parseInt($("#' . $updateRef . '").offset().top)
+                    }, 900, "swing");
+                }
+            }
+        </script>';
+    } else {
+        $content .= '<script>async function scrollFunc(){}</script>';
+    }
+
+    // ----------------------------------------------------------------
+    // Update an abstract paragraph's text content
+    //
+    // Looks up the paragraph by its JATS paragraph ID and replaces its
+    // text, then scrolls to it after the page reloads.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['updateParagraph'])) {
+        $paragraphRef    = preg_replace('/[^a-zA-Z0-9_-]/', '', $_REQUEST['pid']);
+        $para            = $article->getAbstract()->getParagraphfromKey($paragraphRef);
+        $_REQUEST['tab'] = 2; // reopen the Abstract tab after save
+        if (isset($para)) {
+            $para->setText($_POST['text']);
+            $object->updateObject($article);
+            $content .= '<script>
+                $(document).ready(function(){
+                    if ($("#' . $paragraphRef . '").length > 0) {
+                        $("html, body").animate({
+                            scrollTop: parseInt($("#' . $paragraphRef . '").offset().top)
+                        }, 900, "swing");
+                    }
+                });
+            </script>';
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Update an author's fields
+    //
+    // Looks up the author by JATS ID and applies the posted form values
+    // via reflection. 
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['updateAuthor'])) {
+        $_REQUEST['tab'] = 3; // reopen the Authors tab after save
+        if (isset($_REQUEST['aid'])) {
+            $author = $article->getAuthorByJatsID($_REQUEST['aid']);
+            if (is_a($author, "Biblhertz\Article\om\Author")) {
+                $author->updateAuthor($_POST);
+                $object->updateObject($article);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Update a galley file's metadata (name, alt text, genre, locale)
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['updateGalley'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab after save
+        $_REQUEST['galleytab'] = 1; // open Galley Files sub-tab
+        if (isset($_REQUEST['itemid'])) {
+            $galley = $article->getGalleyFileByJatsID($_REQUEST['itemid']);
+            if (is_a($galley, "Biblhertz\Article\om\GalleyFile")) {
+                $galley->updateGalley($_POST);
+                $object->updateObject($article);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Remove a galley file from the article
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['removeGalley'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab after remove
+        $_REQUEST['galleytab'] = 1; // open Galley Files sub-tab
+        $article->removeGalleyFile($_REQUEST['itemid']);
+        $object->updateObject($article);
+    }
+
+    // ----------------------------------------------------------------
+    // Export: OJS XML
+    //
+    // Generates OJS-compatible XML for the specified OJS version
+    // (3_3, 3_4, or 3_5) and returns it as a downloadable file.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsOJS'])) {
+        $adapter = new OMToOJSArticleAdapter($article, "");
+        $allowedVersions = ['3_3', '3_4', '3_5'];
+        if (!empty($_REQUEST['version']) && in_array($_REQUEST['version'], $allowedVersions, true)) {
+            $var = "OJS_" . $_REQUEST['version'];
+            $adapter->setVersion(OMToOJSArticleAdapter::$$var);
+        }
+        $str = $adapter->generateXML();
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '_ojs.xml"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: JATS XML
+    //
+    // Generates JATS XML from the object model, validates it against
+    // the JATS schema, writes a user-scoped validation log, and returns
+    // the XML as a downloadable file.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsJATSXML'])) {
+        $adapter = new OMToJATSXMLArticleAdapter($article);
+        $logger  = new Logger();
+        $adapter->setLogger($logger);
+        $output = $adapter->generateXML();
+
+        $validator = new JATSXMLValidator($logger);
+        $validator->setXMLString($output);
+        $fn = uniqid() . ".xml";
+        $validator->validateJATSXML($fn);
+        $logger->writeOutUserLogFile("jatsXML", $page->getUser());
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . $fn . '"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $output;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: DataCite XML
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsDataCite'])) {
+        $omToDC = new OMToDataCiteAdapter($article, "");
+        $str    = $omToDC->generateXML();
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.xml"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: BibTeX references
+    //
+    // Iterates all references in the article and concatenates their
+    // BibTeX representations into a single .bib file download.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsBibtex'])) {
+        $refs = $article->getReferences();
+        $str  = "This bibtex file was created by PubLink\n\n";
+        foreach ($refs as $ref) {
+            $str .= "\n\n" . $ref->getBibtexReference();
+        }
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.bib"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: HTML preview via TEI Publisher
+    //
+    // Generates JATS XML from the object model, sends it to the
+    // configured TEI Publisher endpoint for transformation, and renders
+    // the result in a standalone HTML page (no page wrapper).
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsHTML'])) {
+        $adapter    = new OMToJATSXMLArticleAdapter($article);
+        $teiContent = $adapter->generateXML();
+        echo getHTMLTemplate($teiContent);
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Replace attached JATS file with a different file from the store
+    //
+    // Removes the current JATS galley, creates a new GalleyFile from
+    // the selected file, and attaches it as the article's JATS source.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['changeJATS'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab
+        $_REQUEST['galleytab'] = 0; // open JATS File sub-tab
+        if (isset($_POST['galley_file']) && is_numeric($_POST['galley_file'])) {
+            $article->removeAssociatedJATSFile();
+            $file = new File($page->getObjDB(), $_POST['galley_file']);
+            if ($file->canEdit($page->getUser()->getID())) {
+                $galley = GalleyFile::getGalleyFile($file);
+                $galley->setGalleyFilePath($file->getPath());
+                $galley->setGalleyFileAltText("JATS XML Galley File for this article");
+                $galley->setType(GalleyFile::$JATSXML);
+                $galley->setID(mt_rand(1, PHP_INT_MAX));
+                $galley->setBase64Encoding($file->getPath());
+                $galley->setGalleyFileSize();
+                $article->addGalleyFile($galley);
+                $object->updateObject($article);
+                $object->updateAttachedFile($file->getID());
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Regenerate the JATS XML from the object model and replace the
+    // attached JATS galley file with the freshly generated version.
+    //
+    // Steps:
+    // 1. Generate JATS XML and write to the user's file store.
+    // 2. Validate the generated XML and write a user log.
+    // 3. Insert a new file record in the database.
+    // 4. Create a GalleyFile from the new record and attach it.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['replaceJATS'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab
+        $_REQUEST['galleytab'] = 0; // open JATS File sub-tab
+        $article->removeAssociatedJATSFile();
+        $outputFilePath = $page->getUser()->getMyFileStoreDirectoryPath()
+            . DIRECTORY_SEPARATOR . uniqid() . "_JATS.xml";
+
+        $adapter = new OMToJATSXMLArticleAdapter($article, $outputFilePath);
+        $logger  = new Logger();
+        $adapter->setLogger($logger);
+        $adapter->generateXML();
+
+        // Validate and log
+        $validator = new JATSXMLValidator($logger);
+        $validator->setXMLString(file_get_contents($outputFilePath));
+        $fn = uniqid() . ".xml";
+        $validator->validateJATSXML($fn);
+        $logger->writeOutUserLogFile("jatsXML", $page->getUser());
+
+        // Insert a new file record for the generated XML
+        $vals = array(
+            'name'            => basename($outputFilePath),
+            'size'            => filesize($outputFilePath),
+            'type'            => "text/xml",
+            'timestamp'       => htmlPage::getNowAsSQLTimeStamp(),
+            'user_details_id' => $page->getUser()->getID(),
+            'path'            => $outputFilePath,
+        );
+
+        // Look up the file type ID for "JATS xml" — log a warning if not found
+        $type = $page->getObjDB()->preparedSelect(
+            "select id from file_type where name = ?",
+            array("JATS xml")
+        );
+        $type = $type->fetch();
+        if ($page->getObjDB()->numRows() != 1) {
+            $logger->print("!!! Generated File type JATS xml is not recognised by the system :: $outputFilePath");
+        } else {
+            $vals['file_type_id'] = $type['id'];
+        }
+
+        $id   = $page->getObjDB()->insert("file", $vals);
+        $file = new File($page->getObjDB(), $id);
+
+        if ($file->canEdit($page->getUser()->getID())) {
+            $galley = GalleyFile::getGalleyFile($file);
+            $galley->setGalleyFilePath($file->getPath());
+            $galley->setGalleyFileAltText("JATS XML Galley File for this article");
+            $galley->setType(GalleyFile::$JATSXML);
+            $galley->setID(mt_rand(1, PHP_INT_MAX));
+            $galley->setBase64Encoding($file->getPath());
+            $galley->setGalleyFileSize();
+            $article->addGalleyFile($galley);
+            $object->updateObject($article);
+            $object->updateAttachedFile($file->getID());
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Add dependent galley files to a parent galley
+    //
+    // Attaches one or more image files as dependent children of the
+    // specified parent galley, identified by its JATS ID. Dependent
+    // files are used for inline images referenced by an HTML galley.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['addDependantGalleys'])) {
+        $_REQUEST['tab']       = 6; // reopen Galley Files tab
+        $_REQUEST['galleytab'] = 2; // open Add Dependant sub-tab
+        if (!empty($_POST['parent_file'])) {
+            $parentJatsID = $_REQUEST['parent_file'];
+            $parent       = $article->getGalleyFileByJatsID($parentJatsID);
+
+            if ($parent != false) {
+                // Build a set of file IDs already attached as dependants of this parent
+                $existingDependantFileIds = [];
+                foreach ($article->getGalleyFiles() as $existing) {
+                    if ($existing->getGenre() === GalleyFile::$DEPENDANT_GENRE
+                        && $existing->getParent() === $parentJatsID) {
+                        $existingDependantFileIds[] = $existing->getFileID();
+                    }
+                }
+
+                foreach ($_POST["dependant_cb"] as $fid) {
+                    // Skip if this file is already a dependant of the same parent
+                    if (in_array((int)$fid, $existingDependantFileIds)) continue;
+
+                    $file = new File($page->getObjDB(), $fid);
+                    if ($file->canEdit($page->getUser()->getID())) {
+                        $galley = GalleyFile::getGalleyFile($file);
+                        $galley->setType(GalleyFile::$IMAGE);
+                        $galley->setGenre(GalleyFile::$DEPENDANT_GENRE);
+                        $galley->setArticle($article);
+                        $galley->setParent($parentJatsID);
+                        $galley->setGalleyFilePath($file->getPath());
+                        $galley->setGalleyFileAltText("Dependent File");
+                        $galley->setID(mt_rand(1, PHP_INT_MAX));
+                        $galley->setBase64Encoding($file->getPath());
+                        $galley->setGalleyFileSize();
+                        $article->addGalleyFile($galley);
+                    }
+                }
+                $object->updateObject($article);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Render the article editor page
+    //
+    // Reload the object and article after any mutations above to ensure
+    // the presentation layer always reflects the latest persisted state.
+    // ----------------------------------------------------------------
+    $object      = new SerializedObject($page->getObjDB(), $_REQUEST['oid']);
+    $article     = unserialize($object->getObject());
+    $presentation = new ArticlePresentation($article, $page->getObjDB());
+    $jatsFile    = new File($page->getObjDB(), $object->getFileID());
+
+    $page->setHeading("Article :: " . $article->getTitle());
+
+    // Export and action toolbar links
+    $content .= "<p>" . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_3",   "Get As OJS 3.3 File");
+    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_4",   "Get As OJS 3.4 File");
+    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_5",   "Get As OJS 3.5 File");
+    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsJATSXML=true",           "Get As JATS File");
+    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsBibtex=true",            "Get Bibtex References");
+    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsDataCite=true",          "Get DataCite References");
+    if (Config::$TEI_PUBLISHER_INTEGRATION) {
+        $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsHTML=true", "Display Article As HTML", "jats_render_" . $object->getID());
+    }
+    $content .= "</p>";
+
+    // Main article editor panel (tabbed; opens to the tab specified in the request)
+    $content .= $presentation->getArticlePanel(
+        "article.html",
+        $object->getID(),
+        $page->getUser(),
+        (isset($_REQUEST['tab'])       ? (int)$_REQUEST['tab']       : 0),
+        $page->getObjDB(),
+        (isset($_REQUEST['galleytab']) ? (int)$_REQUEST['galleytab'] : 0)
+    );
+
+} catch (Exception $e) {
+    $content = "!! Exception :: " . $e->getMessage();
+}
+
+$page->setCentralContent('<div class="col-12">' . $content . '</div>');
+echo $page->getPage();
+
+
+/**
+ * Sends JATS XML content to the TEI Publisher transformation API and returns
+ * the rendered HTML response.
+ *
+ * Posts the XML body to the configured TEI Publisher endpoint
+ * (`Config::$TEI_ENDPOINT`) using the `jats.odd` transformation ruleset.
+ * The `wc=true` parameter enables word-count output in the transformation.
+ *
+ * cURL verbose logging is enabled to aid debugging; verbose output is
+ * included in the return value if an error occurs.
+ *
+ * @param  string $teiContent JATS XML string to transform
+ * @return string             Rendered HTML from TEI Publisher, or an error
+ *                            message with verbose cURL output on failure
+ */
+function renderExternalTEI(string $teiContent): string
+{
+    // Escape bare & that are not already valid XML entity references.
+    // writeRaw() calls in OMToJATSXMLArticleAdapter skip escaping for plain-text
+    // fields, so article data containing & (e.g. "Arts & Sciences") produces
+    // invalid XML that TEI Publisher's strict XML parser rejects.
+    $teiContent = preg_replace('/&(?![a-zA-Z][a-zA-Z0-9]*;|#[0-9]+;|#x[0-9a-fA-F]+;)/', '&amp;', $teiContent);
+
+    $url = Config::$TEI_PUBLISHER_URI . "/api/preview?odd=jats.odd&wc=true";
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL,            $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST,           true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS,     $teiContent);
+    curl_setopt($ch, CURLOPT_HTTPHEADER,     ['Content-Type: application/xml', 'Accept: text/html']);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS,      5);
+    curl_setopt($ch, CURLOPT_TIMEOUT,        300); // 5 min — jats.odd compiles on first use
+    curl_setopt($ch, CURLOPT_VERBOSE,        true);
+
+    $verbose = fopen('php://temp', 'w+');
+    curl_setopt($ch, CURLOPT_STDERR, $verbose);
+
+    $response = curl_exec($ch);
+
+    if (curl_errno($ch)) {
+        $error = "cURL Error: " . curl_error($ch);
+        curl_close($ch);
+        rewind($verbose);
+        return $error . "<hr/>" . stream_get_contents($verbose);
+    }
+
+    curl_close($ch);
+    return $response;
+}
+
+
+/**
+ * Wraps TEI Publisher-rendered HTML in a standalone viewer page.
+ *
+ * Generates JATS XML from the article object model, passes it to
+ * {@see renderExternalTEI()} for transformation, and embeds the result
+ * in a minimal HTML document with the TEI theme stylesheet applied.
+ *
+ * The output is a complete, self-contained HTML page intended to be
+ * echoed directly to the browser (no page wrapper component is used).
+ *
+ * @param  string $teiContent JATS XML string to render
+ * @return string             Complete HTML document as a string
+ */
+function getHTMLTemplate(string $teiContent): string
+{
+    $renderedContent = renderExternalTEI($teiContent);
+
+    return "<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>TEI Document Viewer</title>
+    <link rel='stylesheet' href='" . Bibliotheca_Page::getCSSRoot() . "/tei-theme.css'>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .document-container { max-width: 800px; margin: 0 auto; }
+        .source-info { margin-bottom: 20px; color: #666; font-size: 0.9em; }
+        .tei-content { border: 1px solid #ddd; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class='document-container'>
+        <div class='source-info'></div>
+        <div class='tei-content'>
+            {$renderedContent}
+        </div>
+    </div>
+</body>
+</html>";
+}
+
+?>

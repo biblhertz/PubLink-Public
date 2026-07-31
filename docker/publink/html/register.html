@@ -1,0 +1,133 @@
+<?php
+/**
+ * register.php
+ *
+ * User Registration Page
+ *
+ * Renders the registration form and handles new user account creation.
+ * Uses a dedicated registration page wrapper (`Bibliotheca_Registration_Page`)
+ * rather than the standard content page, as unauthenticated users must be
+ * able to access it.
+ *
+ * Two post-registration login targets are configured:
+ * - Standard registration  → `profile.html?login=true`
+ * - ORCID-linked accounts  → `profile.html?login=true`
+ *
+ * On form submission (`registerButton`):
+ * 1. A new empty User object is created (uid = 0).
+ * 2. The form is validated via {@see UserPresentation::validateForm()}.
+ * 3. **On validation failure** — a modal alert listing the errors is displayed
+ *    and the form is re-rendered with the posted values preserved.
+ * 4. **On validation success** — the user record is created, the user is
+ *    immediately authenticated using the submitted credentials, and redirected:
+ *    - To `profile.html?login=true` on successful authentication.
+ *    - To `index.html?loginFail=true` on authentication failure (should not
+ *      occur in normal flow but guards against edge cases).
+ *
+ * New accounts are created with:
+ * - `current = 't'`      — marks the account as active.
+ * - `user_group_id = 1`  — assigns the default user group.
+ *
+ * Note: the post-registration auto-login uses a separate `Bibliotheca_Content_Page`
+ * instance in guest mode (1) rather than reusing `$page`, as `localAuthenticate()`
+ * is a method on the content page rather than the registration page.
+ *
+ * Request parameters:
+ * - `registerButton` (any, optional) — Triggers registration form processing.
+ *   - `email`     (string, required) — New user's email address.
+ *   - `password1` (string, required) — New user's chosen password (copied to
+ *                                      `password` before authentication).
+ *   - (other user fields as required by UserPresentation::validateForm())
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Registration_Page;
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Publink\om\presentation\UserPresentation;
+use Biblhertz\Publink\utilities\Login;
+use Biblhertz\Publink\Config;
+
+// Use the registration page wrapper — allows unauthenticated access
+$page = new Bibliotheca_Registration_Page();
+
+// Block access entirely when self-registration is turned off in config.ini,
+// even if a user navigates here directly or resubmits the form.
+if (!Config::$REGISTRATION_ENABLED) {
+    header('Location: index.html');
+    exit;
+}
+
+$page->setRegisterTarget("register.html");
+$page->setOrcidTarget("profile.html?login=true");
+
+try {
+
+    // ----------------------------------------------------------------
+    // Handle registration form submission
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['registerButton'])) {
+
+        // Create a blank User object (uid = 0 signals a new record)
+        $user   = new User($page->getObjDB(), 0);
+        $errors = UserPresentation::validateForm($_REQUEST, $page->getObjDB(), $user);
+
+        if (count($errors)) {
+            // --------------------------------------------------------
+            // Validation failed — display error modal
+            //
+            // All validation messages are collected into a single modal
+            // that opens automatically on page load so the user can
+            // correct their input without losing the form values.
+            // --------------------------------------------------------
+            $message = "";
+            foreach ($errors as $e) $message .= "<li>$e</li>";
+
+            $modal = new Modal_Alert($page, "registrationError", "<h2>Error(s) in Form</h2><ul>$message</ul><hr/>");
+            $modal->setOnPageLoad(true);
+            $modal->setConfirmDialog();
+
+        } else {
+            // --------------------------------------------------------
+            // Validation passed — create the account and auto-login
+            //
+            // Set default values before saving:
+            // - current = 't'     marks the account as immediately active.
+            // - user_group_id = 1 assigns the default (standard) user group.
+            //
+            // A separate content page instance is used for localAuthenticate()
+            // since that method is not available on the registration page.
+            // password1 is copied to password so localAuthenticate() finds
+            // the credential under the key it expects.
+            // --------------------------------------------------------
+            $cpage = new Bibliotheca_Content_Page(1); // guest mode for unauthenticated context
+
+            $_REQUEST['current']       = 't';
+            $_REQUEST['user_group_id'] = 1;
+            $user->updateUser($_REQUEST);
+
+            // Copy password1 → password for the authentication call
+            $_REQUEST['password'] = $_REQUEST['password1'];
+            $auth = Login::localAuthenticate($_REQUEST, $cpage);
+
+            if ($auth)
+                header('Location: profile.html?login=true');
+            else
+                // Auth failure after successful registration is unexpected
+                // but redirecting to the login page with the email prefilled
+                // allows the user to recover without losing their account.
+                header('Location: index.html?loginFail=true&&email=' . $_REQUEST['email']);
+        }
+    }
+
+} catch (Exception $e) {
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+?>

@@ -1,0 +1,103 @@
+<?php
+/**
+ * viewImage.php
+ *
+ * Image File Streaming Endpoint
+ *
+ * Streams an image file directly to the browser using the file's detected
+ * MIME type and size. This endpoint is intended to be used as the `src`
+ * attribute of an `<img>` tag or similar, rather than navigated to directly.
+ *
+ * The file is identified by its database ID and access-controlled: the
+ * current user must have view permission before the file is served.
+ *
+ * JP2 (JPEG 2000) images are explicitly rejected — these must be served
+ * via a IIIF image server rather than this endpoint.
+ *
+ * Throws (via $page->handleException()) in the following cases:
+ * - `viewImage` parameter is absent or non-numeric.
+ * - The current user does not have view rights on the file.
+ * - The file is a JP2 image.
+ * - The file does not exist on disk or its image size cannot be read.
+ *
+ * Note: `echo $page->getPage()` is intentionally commented out. This
+ * endpoint either streams a binary file and exits, or delegates exception
+ * handling to the page object — it never renders an HTML page.
+ *
+ * Request parameters:
+ * - `viewImage` (int, required) — Database ID of the image file to stream.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\File;
+
+// Page object is required for DB access, user session, and exception handling,
+// even though no HTML page is rendered by this endpoint.
+$page = new Bibliotheca_Content_Page();
+
+try {
+
+    // ----------------------------------------------------------------
+    // Validate and retrieve the image ID
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['viewImage']) && is_numeric($_REQUEST['viewImage']))
+        $image = $_REQUEST['viewImage'];
+    else
+        throw new Exception("Error :: No image ID is set or ID is not numeric");
+
+    // ----------------------------------------------------------------
+    // Load the file and check view permissions
+    // ----------------------------------------------------------------
+    $file = new File($page->getObjDB(), $image);
+
+    if (!$file->canView($page->getUser()->getID()))
+        throw new Exception("User " . $page->getUser()->getName() . " does not have the rights to view this image");
+
+    // ----------------------------------------------------------------
+    // Reject JP2 (JPEG 2000) images
+    //
+    // JP2 files cannot be reliably streamed or displayed by browsers
+    // without a IIIF-compatible image server. Direct streaming is
+    // not supported — the image should be uploaded to a IIIF server first.
+    // ----------------------------------------------------------------
+    if (!strcmp($file->getFileExtension(), "jp2"))
+        throw new Exception("Cannot display JP2 images - upload the image to a IIIF server");
+
+    // ----------------------------------------------------------------
+    // Stream the image file to the browser
+    //
+    // Uses getimagesize() to detect the MIME type rather than relying
+    // on the stored file extension, making this more robust for files
+    // whose extensions may be missing or incorrect.
+    //
+    // Content-Length is set so the browser can display download progress
+    // and correctly detect a truncated response.
+    // ----------------------------------------------------------------
+    if (file_exists($file->getPath())) {
+        $size = getimagesize($file->getPath());
+        $fp   = fopen($file->getPath(), 'rb'); // 'rb' = read binary, important on Windows
+
+        if ($size and $fp) {
+            header('Content-Type: '   . $size['mime']);
+            header('Content-Length: ' . filesize($file->getPath()));
+
+            fpassthru($fp); // stream file contents directly to output buffer
+            exit;
+        } else {
+            throw new Exception("Image size not found or image file not found");
+        }
+    } else {
+        throw new Exception("Image File does not exist");
+    }
+
+} catch (Exception $e) {
+    // Delegate exception display to the page object.
+    // No HTML page is echoed — the page object handles the error output.
+    $page->handleException($e);
+}
+
+?>

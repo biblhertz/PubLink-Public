@@ -1,0 +1,339 @@
+<?php
+/**
+ * annotationCanvas.php
+ *
+ * Image Annotation Canvas Page
+ *
+ * Displays all annotations associated with a given IIIF canvas for the
+ * current user, including any canvases shared with them by other users.
+ * Also handles annotation management actions (share, delete, publish) before
+ * rendering the page.
+ *
+ * Request parameters:
+ * - `canvas`                (string, required) — IIIF canvas URI to display.
+ * - `shareCanvas`           (any, optional)    — Triggers sharing the canvas with another user.
+ *   - `user_details_id`     (int, required with shareCanvas) — ID of the user to share with.
+ * - `deleteSharer`          (any, optional)    — Removes a previously shared canvas access.
+ *   - `user_details_id`     (int, required with deleteSharer) — ID of the user to remove.
+ * - `deleteAnnotation`      (any, optional)    — Deletes a specific annotation.
+ *   - `aid`                 (int, required with deleteAnnotation) — Annotation ID to delete.
+ * - `publish`               (any, optional)    — Generates and publishes an annotation manifest.
+ *   - `display_name`        (string, required with publish) — Display name for the manifest.
+ *   - `annotation`          (string, required with publish) — Annotation data to include.
+ *   - `api_key`             (string, required with publish) — Annotation server API key,
+ *                                                typed in by the user for this request.
+ * - `getManifest`           (any, optional)    — Like `publish` but returns the manifest as a
+ *                                                downloadable JSON file instead of publishing it.
+ *                                                Does not contact the remote server, so no
+ *                                                `api_key` is required.
+ * - `deletePublishedManifest` (any, optional)  — Removes a previously published manifest.
+ *   - `manifest`            (string, required) — URL/identifier of the manifest to remove.
+ *   - `api_key`             (string, required) — Annotation server API key, typed in by the
+ *                                                user for this request.
+ *
+ * Tab behaviour:
+ * - Default tab (0) shows the first annotation.
+ * - After a share/unshare action, the tab jumps to the sharing panel.
+ * - After a publish action, the tab jumps to the publish panel.
+ *
+ * Throws an Exception (displayed as page content) if:
+ * - `canvas` is not present in the request.
+ * - No annotations exist for the given canvas.
+ * - The current user lacks permission to delete a requested annotation.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\Config;
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\annotation\ImageCanvas;
+use Biblhertz\Publink\annotation\ImageAnnotation;
+use Biblhertz\Publink\annotation\ImageAnnotationPresentation;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+
+// Initialise the page wrapper and output state
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+$tab     = 0;
+$share   = $publish = false;
+
+try {
+
+    // ----------------------------------------------------------------
+    // Share canvas with another user
+    // Grants the specified user read access to this canvas's annotations.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['shareCanvas'])) {
+        if (
+            (isset($_REQUEST['user_details_id']) && is_numeric($_REQUEST['user_details_id'])) &&
+            isset($_REQUEST['canvas'])
+        ) {
+            ImageAnnotation::shareCanvas(
+                $_REQUEST['user_details_id'],
+                $page->getUser()->getID(),
+                $_REQUEST['canvas'],
+                $page->getObjDB()
+            );
+        }
+        $share = true; // flag to open the sharing tab after render
+    }
+
+    // ----------------------------------------------------------------
+    // Remove a user's shared access to this canvas
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['deleteSharer'])) {
+        if (
+            (isset($_REQUEST['user_details_id']) && is_numeric($_REQUEST['user_details_id'])) &&
+            isset($_REQUEST['canvas'])
+        ) {
+            ImageAnnotation::deleteSharer(
+                $_REQUEST['user_details_id'],
+                $page->getUser()->getID(),
+                $_REQUEST['canvas'],
+                $page->getObjDB()
+            );
+        }
+        $share = true; // flag to open the sharing tab after render
+    }
+
+    // ----------------------------------------------------------------
+    // Delete an annotation
+    // Checks that the current user has ownership rights before deleting.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['deleteAnnotation'])) {
+        $annotation = new ImageAnnotation($page->getObjDB(), $_REQUEST['aid']);
+        if ($annotation->canDelete($page->getUser()->getID())) {
+            $annotation->deleteImageAnnotation($page->getUser()->getID());
+        } else {
+            throw new Exception("You do not have the rights to delete that annotation");
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Publish or download annotation manifest (requires Config::$PUBLICATION)
+    //
+    // 'publish'     — generates a IIIF annotation manifest and publishes it
+    //                 to the remote server, then shows the published URL.
+    // 'getManifest' — generates the same manifest but returns it as a
+    //                 downloadable JSON file without publishing.
+    // ----------------------------------------------------------------
+    if (Config::$PUBLICATION && (isset($_REQUEST['publish']) || isset($_REQUEST['getManifest']))) {
+        $publish = true;
+
+        // Retrieve the stored manifest URI for this canvas and user
+        $manifest = $page->getObjDB()->preparedGetOne(
+            "select manifest from image_annotation where canvas = ? and user_details_id = ?",
+            array($_REQUEST['canvas'], $page->getUser()->getID())
+        );
+
+        // Build the canvas object and extract its dimensions
+        $icanvas = new ImageCanvas($page->getObjDB());
+        $icanvas->setCanvas($_REQUEST['canvas']);
+        $icanvas->setManifest($manifest);
+        $icanvas->extractCanvasSizes();
+
+        // Build the manifest parameters for the current user's session
+        $params = [
+            "user"    => $page->getUser()->getUserName(),
+            "uri"     => $_REQUEST['canvas'],
+            "session" => $page->getUserSession()->getSessionIdentifier(),
+        ];
+
+        $manifest = $icanvas->getAnnotationManifest(
+            $params,
+            trim($_REQUEST['display_name']),
+            "",
+            $_REQUEST['annotation']
+        );
+
+        if (isset($_REQUEST['getManifest'])) {
+            // Return the manifest as a plain-text JSON file download
+            header("Content-type: text/plain");
+            header('Content-Disposition: attachment; filename="' . uniqid() . '_manifest.json"');
+            header("Pragma: no-cache");
+            header("Expires: 0");
+            echo $manifest;
+            exit;
+
+        } else {
+            // API key must be supplied by the user on each request — Publink has
+            // no stored key of its own to authenticate publishing with.
+            if (empty($_REQUEST['api_key'])) {
+                throw new Exception("API key is required to publish a manifest");
+            }
+
+            // Publish the manifest to the remote server and record its URL
+            $result      = $icanvas->publishManifest($manifest, trim($_REQUEST['api_key']));
+            $resultArray = is_string($result) ? json_decode($result, true) : null;
+            $url         = $resultArray['url'] ?? '';
+
+            if ($url) {
+                $icanvas->publishCanvas($url, $page->getUser()->getID());
+                $target   = uniqid();
+                $content .= "<h4>Manifest has been published at " . htmlspecialchars($url) . "</h4><br/>";
+                $content .= "<a href='https://theseusviewer.org?iiif-content=" . urlencode($url) . "' target='$target'>View Online</a>";
+            } else {
+                if ($result === false) {
+                    $detail = 'curl connection failed';
+                } elseif ($resultArray !== null) {
+                    $detail = $resultArray['error'] ?? json_encode($resultArray);
+                } else {
+                    $detail = substr((string)$result, 0, 300);
+                }
+                $content .= '<div class="alert alert-danger">Publication failed: ' . htmlspecialchars($detail) . '</div>';
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Delete a previously published manifest from the remote server
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['deletePublishedManifest'])) {
+        // API key must be supplied by the user on each request — Publink has
+        // no stored key of its own to authenticate removal with.
+        if (empty($_REQUEST['api_key'])) {
+            throw new Exception("API key is required to remove a manifest");
+        }
+
+        $icanvas = new ImageCanvas($page->getObjDB());
+        $icanvas->setCanvas($_REQUEST['canvas']);
+        $icanvas->removeManifest($_REQUEST['manifest'], $page->getUser()->getID(), trim($_REQUEST['api_key']));
+        $tab = isset($_REQUEST['tab']) && is_numeric($_REQUEST['tab']) ? (int) $_REQUEST['tab'] : 0;
+        header("Location: annotationCanvas.html?canvas=" . urlencode($_REQUEST['canvas']) . "&tab=$tab");
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Validate that a canvas ID has been provided
+    // ----------------------------------------------------------------
+    if (!isset($_REQUEST['canvas'])) {
+        throw new Exception("Canvas ID is not set");
+    }
+
+    $canvas = $_REQUEST['canvas'];
+
+    // ----------------------------------------------------------------
+    // Load annotations for this canvas
+    //
+    // Returns annotations owned by the current user, plus any that have
+    // been explicitly shared with them via user_details_canvas_annotation.
+    // ----------------------------------------------------------------
+    $annotations = $page->getObjDB()->preparedSelect(
+        "select * from image_annotation 
+         where (canvas = ? and user_details_id = ?) 
+            or (canvas = ? and canvas in (
+                select canvas from user_details_canvas_annotation 
+                where user_details_id = ? and image_annotation.user_details_id = owner_id
+            ))",
+        array($canvas, $page->getUser()->getID(), $canvas, $page->getUser()->getID())
+    );
+
+    $numAnns = $page->getObjDB()->numRows();
+
+    // Set active tab: default is 0 (first annotation);
+    // bump to the share tab or publish tab if those actions just ran,
+    // or honour an explicit ?tab= redirect (e.g. after deleting a manifest).
+    if ($share)                                                        $tab = $numAnns;
+    elseif (isset($_REQUEST['tab']) && is_numeric($_REQUEST['tab'])) $tab = (int) $_REQUEST['tab'];
+    elseif ($publish)                                                 $tab = $numAnns + 1;
+
+    if ($numAnns == 0) {
+        throw new Exception("<div><h4>Error: No annotations exist for canvas $canvas or canvas doesn't exist</h4></div>");
+    }
+
+    // Fetch a representative annotation to use for the canvas thumbnail
+    $exampleAnn = new ImageAnnotation(
+        $page->getObjDB(),
+        $page->getObjDB()->preparedGetOne(
+            "select id from image_annotation where canvas = ?",
+            array($canvas)
+        )
+    );
+
+    // ----------------------------------------------------------------
+    // Render the page
+    // ----------------------------------------------------------------
+
+    // Page heading: canvas URI + annotation count
+    $page->setHeading(
+        htmlspecialchars($canvas)
+        . ' <small class="text-muted" id="annotationstring">— '
+        . ImageAnnotationPresentation::getAnnotationString($numAnns)
+        . '</small>'
+    );
+
+    // Thumbnail + Mirador launcher
+    $exampleAnn->resolveImageUrls();
+    $content .= '<div class="d-flex align-items-center gap-3 mb-3">'
+        . '<img src="' . $exampleAnn->getThumbnailURL() . '" class="img-thumbnail" style="max-height:200px"/>'
+        . ImageAnnotationPresentation::getMiradorButtonOpener($page->getObjDB(), $canvas, $page->getUser()->getID())
+        . '</div>';
+
+    // Tabbed annotation panel (one tab per annotation, plus share and publish tabs)
+    $content .= '<div id="canvaspanel" class="col-12">' .
+        ImageAnnotationPresentation::getCanvasPanel(
+            $page->getObjDB(), $annotations, $canvas,
+            $page->getUser()->getID(), "annotationCanvas.html", $tab
+        ) . '</div>';
+
+    // Polling script to detect external Mirador changes
+    $content .= miradorCheck($canvas);
+
+    $page->setCentralContent($content);
+
+} catch (Exception $e) {
+    // Surface any exception as the page's central content
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+
+/**
+ * Generates an inline JavaScript snippet that polls a server-side service
+ * every 3 seconds to check whether Mirador has added or modified an annotation
+ * for the given canvas.
+ *
+ * If the service returns a non-empty response, the canvas panel (`#canvaspanel`)
+ * is replaced with the updated HTML and the share form is reset. This keeps the
+ * annotation list in sync with changes made in the Mirador viewer without
+ * requiring a full page reload.
+ *
+ * @param  string $canvas The IIIF canvas URI to monitor
+ * @return string         An HTML <script> block containing the polling function
+ */
+function miradorCheck(string $canvas): string
+{
+    return '<script type="text/javascript">
+    function miradorCheck(){
+        // Remember which tab the user is on so we can restore it after a panel refresh
+        var activeIndex = $("#canvaspanel .nav-link").index($("#canvaspanel .nav-link.active"));
+
+        var message = $.ajax({
+            type: "GET",
+            url: "services/checkAnnotationService.php?canvas=' . $canvas . '",
+            async: false
+        }).responseText;
+
+        if(message !== ""){
+            $("#canvaspanel").html(message);
+            // Restore the active tab (Bootstrap tab plugin via data-toggle="tab")
+            if (activeIndex > 0) {
+                var newLinks = $("#canvaspanel .nav-link");
+                if (newLinks.length > activeIndex) {
+                    $(newLinks[activeIndex]).tab("show");
+                }
+            }
+            var sf = document.getElementById("shareForm");
+            if (sf) sf.reset();
+        }
+    }
+
+    // Poll every 3 seconds for Mirador-driven annotation changes
+    setInterval(miradorCheck, 3000);
+</script>';
+}
+
+?>

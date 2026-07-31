@@ -1,0 +1,142 @@
+<?php
+/**
+ * userStats.php
+ *
+ * User Usage Statistics Page
+ *
+ * Displays an activity summary and full session history for a specific user,
+ * drawn from the `user_intranet_log` table. Intended for administrators
+ * monitoring user activity across the application.
+ *
+ * The summary table includes:
+ * - Total number of distinct intranet sessions
+ * - Timestamp of the user's most recent and first recorded actions
+ * - Number of distinct IP addresses the user has connected from
+ * - Number of distinct client strings (browsers/devices) observed
+ * - Total number of recorded security breach attempts
+ *
+ * Below the summary, a full session history table is rendered via
+ * {@see UserPresentation::getUserSessionsAsTable()}.
+ *
+ * Required GET parameters:
+ * - `pid` (int) — Database ID of the user to display statistics for.
+ *                 Throws if absent or non-numeric.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Publink\om\presentation\UserPresentation;
+use Biblhertz\Publink\pages\htmlPage;
+
+$page = new Bibliotheca_Content_Page();
+
+try {
+
+    // ----------------------------------------------------------------
+    // Validate the user ID parameter
+    // ----------------------------------------------------------------
+    if (!isset($_GET['pid']) || !is_numeric($_GET['pid']))
+        throw new Exception("Error : User ID is not set or is numeric");
+
+    $user = new User($page->getObjDB(), $_GET['pid']);
+    $content = "";
+    $page->setHeading("Usage Stats for " . $user->getName());
+
+    // ----------------------------------------------------------------
+    // Build the usage summary table
+    // Each statistic is a separate query against user_intranet_log.
+    // ----------------------------------------------------------------
+    $str  = '<table class="table table-bordered">';
+
+    // Link back to the full user record
+    $str .= "<tr><th>User Details for</th><td>"
+          . htmlPage::makeLink("user.html?uid=" . $_GET['pid'], $user->getName())
+          . "</td></tr>";
+
+    // Total number of distinct sessions (one session = one user_session_id)
+    $data = $page->getObjDB()->preparedStatement(
+        "select distinct user_session_id
+         from user_intranet_log
+         where user_details_id = ?",
+        array($_GET['pid'])
+    );
+    $str .= "<tr><th>Number of Intranet Sessions</th><td>" . $data->rowCount() . "</td></tr>";
+
+    // Most recent action — order descending and take the first row
+    $data2 = $page->getObjDB()->preparedStatement(
+        "select timestamp
+         from user_intranet_log
+         where user_details_id = ?
+         order by timestamp desc",
+        array($_GET['pid'])
+    );
+    $d         = $data2->fetch();
+    $timestamp = htmlPage::getTimeStampAsDateTimeArray($d['timestamp']);
+    $str .= "<tr><th>Last Action</th><td>" . $timestamp[0] . " at " . $timestamp[1] . "</td></tr>";
+
+    // First recorded action — order ascending and take the first row
+    $data2 = $page->getObjDB()->preparedStatement(
+        "select timestamp
+         from user_intranet_log
+         where user_details_id = ?
+         order by timestamp asc",
+        array($_GET['pid'])
+    );
+    $d         = $data2->fetch();
+    $timestamp = htmlPage::getTimeStampAsDateTimeArray($d['timestamp']);
+    $str .= "<tr><th>First Action</th><td>" . $timestamp[0] . " at " . $timestamp[1] . "</td></tr>";
+
+    // Number of distinct IP addresses the user has connected from.
+    // A high count may indicate VPN usage, travel, or a shared account.
+    $data2 = $page->getObjDB()->preparedStatement(
+        "select distinct(ip_address)
+         from user_intranet_log
+         where user_details_id = ?",
+        array($_GET['pid'])
+    );
+    $str .= "<tr><th>Number of Distinct IP Addresses</th><td>" . $data2->rowCount() . "</td></tr>";
+
+    // Number of distinct client strings (user agent / browser combinations)
+    $data2 = $page->getObjDB()->preparedStatement(
+        "select distinct(client)
+         from user_intranet_log
+         where user_details_id = ?",
+        array($_GET['pid'])
+    );
+    $str .= "<tr><th>Number of Different Clients</th><td>" . $data2->rowCount() . "</td></tr>";
+
+    // Total number of log entries flagged as security breach attempts
+    // (security_breach = 1 in the log table)
+    $data2 = $page->getObjDB()->preparedStatement(
+        "select security_breach
+         from user_intranet_log
+         where user_details_id = ?
+           AND security_breach = 1",
+        array($_GET['pid'])
+    );
+    $str .= "<tr><th>Total Security Breach Attempts</th><td>" . $data2->rowCount() . "</td></tr>";
+
+    $content .= $str . "</table>";
+
+    // ----------------------------------------------------------------
+    // Render the full session history table
+    // Delegates to UserPresentation for the detailed per-session breakdown.
+    // ----------------------------------------------------------------
+    $presentation = new UserPresentation($user);
+    $stats        = $presentation->getUserSessionsAsTable();
+
+    $content .= "<h3>Session Information</h3>"
+              . $stats
+              . "<p>" . htmlPage::makeLink("userStats.html", "Back to Usage Statistics") . "</p>";
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+?>

@@ -1,0 +1,391 @@
+<?php
+/**
+ * reference.php
+ *
+ * Single Reference Detail Page
+ *
+ * Displays a detailed view of a single bibliographic reference, identified by
+ * its label key within a serialised object. The object may be either a
+ * standalone ReferenceCollection or an Article (in which case the reference
+ * is retrieved from the article's reference collection).
+ *
+ * The page provides:
+ * - A detail table of all reference fields via ReferencePresentation.
+ * - A CSL citation bar: a pulldown of available citation styles that renders
+ *   the formatted citation via `citeService.php` on selection change.
+ * - A tabbed panel of external search results (CrossRef, Alma, and optionally
+ *   Google for Book/Manuscript types). Each tab either shows previously cached
+ *   refCheck results or a search button that fetches results on demand.
+ * - Import functionality: checkboxes in search results allow the user to select
+ *   fields to import into the reference via `refUpdateService.php`.
+ *
+ * Also handles two export actions before rendering:
+ * - `getAsBibtex` — Downloads the reference as a `.bib` file.
+ * - `getAsJATS`   — Downloads the reference as a JATS XML fragment.
+ *
+ * The back link is context-aware: it returns to `referenceCollection.html` if
+ * the parent object is a ReferenceCollection, or to `article.html` if it is an
+ * Article, both with the `refkey` parameter set to scroll to the reference row.
+ *
+ * Required request parameters:
+ * - `oid` (int, required)    — Serialised object ID of the parent collection or article.
+ * - `key` (string, required) — Label key of the reference to display.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\htmlPage;
+use Biblhertz\Publink\om\SerializedObject;
+use Biblhertz\Article\om\presentation\ReferencePresentation;
+use Biblhertz\Article\om\presentation\ReferenceCollectionPresentation;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\Config;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+
+    // ----------------------------------------------------------------
+    // Load the serialised object and resolve the reference
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['oid']) && is_numeric($_REQUEST['oid'])) {
+        $oid    = $_REQUEST['oid'];
+        $object = new SerializedObject($page->getObjDB(), $oid);
+    } else {
+        throw new Exception("Error :: No object ID is set or ID is not numeric");
+    }
+
+    if (isset($_REQUEST['key']) && strcmp("", $_REQUEST['key'])) {
+        $key = $_REQUEST['key'];
+    } else {
+        throw new Exception("Error :: No reference ID is set");
+    }
+
+    $collection = unserialize($object->getObject());
+
+    // Resolve the reference and set the back link depending on the parent object type.
+    // - ReferenceCollection: back to the collection page, anchored to this reference.
+    // - Article: back to the article page, anchored to this reference.
+    if (is_a($collection, "\Biblhertz\Article\om\ReferenceCollection")) {
+        $reference = $collection->getReferenceFromKey($key);
+        $link      = "<a href=\"referenceCollection.html?oid=$oid&amp;refkey=$key\">Back</a>";
+    } elseif (is_a($collection, "\Biblhertz\Article\om\Article")) {
+        $reference = $collection->getReferences()->getReferenceFromKey($key);
+        $link      = "<hr/><a href=\"article.html?oid=$oid&amp;refkey=$key\">Back</a>";
+    } else {
+        throw new Exception("Error :: Unrecognised object type");
+    }
+
+    // ----------------------------------------------------------------
+    // Export: BibTeX
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsBibtex'])) {
+        $str = "This bibtex file was created by PubLink\n\n"
+             . "\n\n" . $reference->getBibtexReference();
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.bib"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Export: JATS XML fragment
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['getAsJATS'])) {
+        $str = "This JATS reference file was created by PubLink\n\n"
+             . "\n\n" . $reference->getJATSReference();
+
+        header("Content-type: text/plain");
+        header('Content-Disposition: attachment; filename="' . uniqid() . '.xml"');
+        header("Pragma: no-cache");
+        header("Expires: 0");
+        echo $str;
+        exit;
+    }
+
+    // ----------------------------------------------------------------
+    // Build toolbar links (export + back)
+    // URL-encode the key to safely pass label strings with special characters.
+    // ----------------------------------------------------------------
+    $key    = urlencode($key);
+    $link  .= " | <a href=\"reference.html?oid=$oid&amp;key=$key&amp;getAsBibtex=true\">Get As Bib</a>";
+    $link  .= " | <a href=\"reference.html?oid=$oid&amp;key=$key&amp;getAsJATS=true\">Get As JATS Fragment</a>";
+    $content = $link . "<hr/>";
+
+    $presentation = new ReferencePresentation($reference);
+    $page->setHeading($presentation->getShortReference());
+
+    // ----------------------------------------------------------------
+    // CSL citation bar
+    //
+    // A pulldown of citation styles (from Config::$CITATIONS_LIST) that
+    // calls citeService.php on change and on page load to render the
+    // formatted citation into #citation.
+    // ----------------------------------------------------------------
+    $pulldown = htmlPage::makeOptionFromArray("citebarpulldown", Config::$CITATIONS_LIST);
+
+    // ----------------------------------------------------------------
+    // External search panel (CrossRef, Alma, optionally Google)
+    //
+    // Each search service gets its own tab via getSearchPanel().
+    // Google Books is only included for Book and Manuscript reference types,
+    // as it is not applicable to journal articles or other types.
+    // ----------------------------------------------------------------
+    $panel      = new BootstrapTabbedPanel();
+    $tabContent = array();
+    $headings   = array();
+
+    getSearchPanel("CrossRef", "crossref");
+    if(Config::$PRIMO_INTEGRATION)getSearchPanel("Alma",     "alma");
+
+    if (
+        is_a($reference, "Biblhertz\Article\om\Book") ||
+        is_a($reference, "Biblhertz\Article\om\Manuscript")
+    ) {
+        getSearchPanel("Google", "google");
+    }
+
+    // ----------------------------------------------------------------
+    // Two-column layout: citebar + reference detail table (left) + search panel (right)
+    // Citebar is inside the left column so the tabbed panel aligns to the top of the row.
+    // ----------------------------------------------------------------
+    $content .= '<div id="citebar" class="d-flex align-items-center py-2 w-100">'
+               .     '<div id="citation" class="flex-grow-1 pr-3"></div>'
+               .     '<div class="flex-shrink-0 small text-nowrap">CSL&nbsp;' . $pulldown . '</div>'
+               . '</div>';
+
+    $content .= '<div class="row">';
+
+    $content .= '<div id="referenceTable" class="col-md-7">'
+               . $presentation->getAsTable()
+               . '</div>';
+
+    $content .= '<div id="rightColumn" class="col pt-4">';
+
+    $panel->setTabContent($tabContent);
+    $panel->setTabNames($headings);
+    $content .= $panel->getComponent();
+    $content .= '</div>';
+
+    $content .= '</div>'; // close .row
+
+    $content .= getScript();
+
+    $page->setCentralContent($content);
+
+} catch (Exception $e) {
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+
+/**
+ * Appends a search service tab to the global $headings and $tabContent arrays.
+ *
+ * If cached refCheck results exist for the given service name on the reference,
+ * they are rendered immediately as a table list. Otherwise, a search button is
+ * rendered that triggers an on-demand fetch from `refService.php` when clicked.
+ *
+ * Modifies the global $headings and $tabContent arrays directly, as these are
+ * consumed by the BootstrapTabbedPanel after all tabs have been added.
+ *
+ * @param string $heading Display name for the tab (e.g. "CrossRef")
+ * @param string $name    Service key used for refCheck lookup and as the
+ *                        data-service attribute on the search button (e.g. "crossref")
+ */
+function getSearchPanel(string $heading, string $name): void
+{
+    global $headings, $tabContent, $reference;
+
+    $headings[] = $heading;
+    $refs       = $reference->getRefCheck($name);
+
+    if (isset($refs)) {
+        // Cached results available — render them immediately
+        $crpresentation = new ReferenceCollectionPresentation($refs);
+        $tabContent[]   = $crpresentation->getAsTableList();
+    } else {
+        // No cached results — show a search button for on-demand fetching
+        $tabContent[] = getSearchContent($name);
+    }
+}
+
+
+/**
+ * Returns the HTML for an empty search tab with an on-demand search button.
+ *
+ * The button carries `data-service` and `data-container` attributes that are
+ * read by the `.searchButton` click handler in getScript() to determine which
+ * service to call and which container to populate with results.
+ *
+ * A spinner is shown in the container while the request is in flight.
+ *
+ * @param  string $type Service key (e.g. "crossref", "alma", "google")
+ * @return string       HTML string for the search tab content
+ */
+function getSearchContent(string $type): string
+{
+    $container = $type . "Result";
+    return '<div id="' . $container . '" class="custom-scrollbar text-center translate-middle w-100 h-100" style="border:solid; height:800px; word-break:break-all;">
+                <button type="submit"
+                        class="btn btn-outline-secondary btn-block float-right searchButton"
+                        data-service="' . $type . '"
+                        data-container="' . $container . '"
+                        id="search' . ucwords($type) . 'Button">
+                    <span class="fas fa-stop-circle"></span>
+                    Search ' . ucwords($type) . '
+                </button>
+            </div>';
+}
+
+
+/**
+ * Returns the inline JavaScript that drives all interactive behaviour on the page.
+ *
+ * Provides the following functionality:
+ *
+ * **Checkbox tracking (`checkedBoxes`)**
+ * Listens for changes to any checkbox on the page and maintains a `checkedBoxes`
+ * array of `{id, value}` objects. Shows/hides the import button based on whether
+ * any checkboxes are checked.
+ *
+ * **Import button (`.dynamic-button`)**
+ * On click, sends the checked boxes to `refUpdateService.php` as JSON, then
+ * refreshes `#referenceTable` with the updated reference detail and re-renders
+ * the CSL citation. Unchecks all boxes and hides the import button afterwards.
+ *
+ * **CSL citation bar (`#citebarpulldown`)**
+ * Calls `citeBarPullDown()` on both page load and pulldown change. Fetches a
+ * formatted citation from `citeService.php` for the selected style and injects
+ * it into `#citation`.
+ *
+ * **External search buttons (`.searchButton`)**
+ * On click, hides the button, shows a spinner, then calls `refAction()` which
+ * fetches results from `refService.php` for the given service and injects them
+ * into the corresponding container div.
+ *
+ * **`openClose(divId)`**
+ * Rather than toggling a row in place (the commented-out original behaviour),
+ * opens the row's content in the page's hidden draggable modal, appending an
+ * "Import All Checked Results" button at the bottom. This allows the user to
+ * review and selectively import search result fields without leaving the page.
+ *
+ * Uses the global `$oid` and `$key` variables for all service URL construction.
+ *
+ * @return string An HTML <script> block containing all page interaction handlers
+ */
+function getScript(): string
+{
+    global $oid, $key;
+
+    return '<script type="text/javascript">
+
+    var checkedBoxes; // tracks currently checked result checkboxes across the page
+
+    // Show/hide the import button and update checkedBoxes on any checkbox change
+    $(document).on("change", "input[type=\'checkbox\']", function() {
+        if ($("input[type=\'checkbox\']:checked").length > 0) {
+            $("#importButton").show("slow");
+        } else {
+            $("#importButton").hide("slow");
+        }
+
+        checkedBoxes = $("input[type=\'checkbox\']:checked").map(function() {
+            return { id: this.id, value: this.value };
+        }).get();
+    });
+
+    // Import checked fields into the reference via refUpdateService
+    $(document).on("click", ".dynamic-button", function() {
+        $("input[type=\'checkbox\']").prop("checked", false);
+        $("#importButton").hide("slow");
+
+        $.ajax({
+            url:      "./services/reference/refUpdateService.php?oid=' . $oid . '&key=' . $key . '",
+            type:     "GET",
+            data:     { checked: JSON.stringify(checkedBoxes) },
+            dataType: "html",
+            success: function(values) {
+                $("#referenceTable").html(values);
+                citeBarPullDown();
+                $("#hidden_modal").modal("hide");
+            }
+        });
+    });
+
+    // Re-render the citation whenever the style pulldown changes
+    $("#citebarpulldown").change(function() {
+        citeBarPullDown();
+    });
+
+    // Render the citation on initial page load using the default selected style
+    $(document).ready(function() {
+        citeBarPullDown();
+    });
+
+    /** Fetch and display a formatted citation for the currently selected CSL style */
+    function citeBarPullDown(){
+        var selected = $("#citebarpulldown").val();
+        $.ajax({
+            url:      "./services/reference/citeService.php?oid=' . $oid . '&key=' . $key . '&style=" + selected,
+            type:     "GET",
+            dataType: "html",
+            success: function(values) {
+                $("#citation").html(values);
+            }
+        });
+    }
+
+    // On search button click: hide the button, show a spinner, then fetch results
+    $(".searchButton").click(function() {
+        var service   = $(this).attr("data-service");
+        var container = $(this).attr("data-container");
+        $(this).hide("slow");
+        $("#" + container).html("<i class=\"fas fa-spinner fa-spin\" style=\"text-center\"></i>");
+        refAction(service, container);
+    });
+
+    /** Fetch search results from refService and inject into the target container */
+    function refAction(service, container){
+        $.ajax({
+            url:      "./services/reference/refService.php?oid=' . $oid . '&key=' . $key . '&service=" + service,
+            type:     "GET",
+            dataType: "html",
+            success: function(values) {
+                $("#" + container).html(values);
+            }
+        });
+    }
+
+    /**
+     * Opens the content of a search result row in the page\'s draggable modal,
+     * appending an import button so the user can selectively import checked fields.
+     * Replaces the original in-place toggle behaviour (see commented-out version above).
+     *
+     * @param {string} divId - The suffix of the row element ID (row_{divId})
+     */
+    function openClose(divId){
+        const rowName = "row_" + divId;
+        const html    = $("#" + rowName).html();
+        $("#hidden_modal_message").html(html + getImportButton());
+        $("#hidden_modal").draggable();
+        hidden_modal_func();
+    }
+
+    /** Returns the HTML for the deferred import button shown inside the modal */
+    function getImportButton(){
+        return "<hr/><button type=submit class=\"btn btn-outline-secondary dynamic-button\" id=\"importButton\" style=\"display:none\"><span class=\"fas fa-stop-circle\"></span>&nbsp;Import All Checked Results</button>";
+    }
+
+    </script>';
+}
+
+?>

@@ -1,0 +1,12 @@
+{
+  "manifest_id":       "https://your-server.example/iiif_manifests/your-article-id.json",
+  "base_canvas":       "https://your-server.example/iiif_manifests/your-article-id",
+  "label_it":          "Titolo dell'articolo",
+  "label_en":          "Article title",
+  "rights":            "https://creativecommons.org/licenses/by/4.0/",
+  "required_stmt_it":  "Nome dell'istituzione",
+  "required_stmt_en":  "Institution name",
+  "fetch_delay":       0.3,
+  "fallback_width":    1000,
+  "fallback_height":   1000
+}

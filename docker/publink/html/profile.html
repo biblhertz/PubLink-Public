@@ -1,0 +1,368 @@
+<?php
+/**
+ * profile.php
+ *
+ * User Profile / File Management Page
+ *
+ * The main landing page after login. Provides the current user with access to
+ * their files, serialised objects, and log files, along with upload and delete
+ * functionality. Also handles several pre-render actions.
+ *
+ * Pre-render actions (handled before the page is built):
+ * - `logout`        — Logs out the current user and redirects to the home page.
+ * - `fileDownload`  — Streams a file to the browser as a download and exits.
+ * - `deleteAll`     — Permanently deletes all of the user's files, objects, and logs.
+ * - `login`         — Redirects newly authenticated users to the JATS upload page.
+ *
+ * Main page content (four-tab panel):
+ * - **My Files**          — Lists all general files owned by the user.
+ * - **Serialized Objects** — Lists all serialised article objects owned by the user.
+ * - **Log Files**         — Lists all log files generated for the user.
+ * - **File Uploader**     — Drag-and-drop uploader that posts to `uploadFileService.php`.
+ *                           On completion, refreshes the file and log tabs and switches
+ *                           back to the My Files tab automatically.
+ *
+ * Deletion is handled via confirmation modals:
+ * - File deletion (`deletePrompt`) — deletes a file; updates either the file or
+ *   log container depending on whether the file is a log file.
+ * - Object deletion (`deleteObj`)  — deletes a serialised object; updates the
+ *   object container.
+ * - Delete all (`deleteAll`)       — destroys all user data after confirmation.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Modal_Confirm;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\components\BootstrapFileUpload;
+use Biblhertz\Publink\om\File;
+use Biblhertz\Publink\om\presentation\FilePresentation;
+use Biblhertz\Publink\om\presentation\SerializedObjectPresentation;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\Config;
+
+$page = new Bibliotheca_Content_Page();
+
+// ----------------------------------------------------------------
+// Pre-render action: logout
+//
+// Ends the user's session and redirects to the home page.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['logout'])) {
+    $page->logout();
+    header("Location: index.html");
+    exit;
+}
+
+// ----------------------------------------------------------------
+// Pre-render action: file download
+//
+// Streams the requested file to the browser as an attachment.
+// Ownership/permission checking is delegated to File::downloadFile().
+// ----------------------------------------------------------------
+if (isset($_REQUEST['fileDownload']) && is_numeric($_REQUEST['fileDownload'])) {
+    $f = new File($page->getObjDB(), $_REQUEST['fileDownload']);
+    $f->downloadFile($page->getUser()->getID());
+    exit;
+}
+
+// ----------------------------------------------------------------
+// Pre-render action: delete all user data
+//
+// Permanently removes all files, serialised objects, and log records
+// belonging to the current user. Triggered after confirmation modal.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['deleteAll'])) {
+    $page->getUser()->deleteAllFilesAndObjects();
+}
+
+// ----------------------------------------------------------------
+// Pre-render action: post-login redirect
+//
+// When a user arrives having just authenticated, redirect them to
+// the JATS upload page with the login flag set so it can perform
+// any first-login initialisation steps.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['login'])) {
+    header("Location: uploadJATS.html?login=true");
+    exit;
+}
+
+$page->setHeading("Biblioteca Hertziana : PubLink Prototype");
+
+try {
+
+    // ----------------------------------------------------------------
+    // "Delete All" confirmation modal
+    //
+    // The confirmation forwards to profile.html?deleteAll=true on OK.
+    // The modal body and trigger JS are injected at the top of the page.
+    // ----------------------------------------------------------------
+    $confirm = new Modal_Confirm($page, "deleteAll", "This will permanently all your files, objects and logs : Are you sure?");
+    $confirm->setOKAddress("profile.html?deleteAll=true");
+    $content = $confirm->getConfirmMessageBody() . $confirm->getJavaScript();
+
+    // Delete All button — triggers the confirmation modal
+    $content .= '<p><button class="btn btn-outline-primary" id="deleteAllButton" onclick="deleteAll_func();">Delete All Files, Objects and Logs</button></p><br/>';
+
+    // Main content: file uploader panel + deletion script blocks
+    $content .= '<div class="col-12">' . getFileUploader() . '</div>'
+              . getFileUpdater()
+              . getFileDeleter($page)
+              . getObjectDeleter($page);
+
+    $page->setCentralContent($content);
+
+} catch (Exception $e) {
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+
+/**
+ * Builds and returns the four-tab file management panel.
+ *
+ * Each tab renders its content into a named container div so the
+ * JavaScript update functions (loadFiles, loadLogs) can refresh
+ * individual tabs without a full page reload after file operations.
+ *
+ * Tabs:
+ * - Tab 0 (My Files)           — #filecontainer
+ * - Tab 1 (Serialized Objects) — #objectcontainer
+ * - Tab 2 (Log Files)          — #logfilecontainer
+ * - Tab 3 (File Uploader)      — drag-and-drop upload form
+ *
+ * Uses the global `$page` for DB and user context.
+ *
+ * @return string HTML string of the rendered tabbed panel component
+ */
+function getFileUploader(): string
+{
+    global $page;
+
+    $panel = new BootstrapTabbedPanel();
+    $panel->setTitle("Files");
+    $panel->setName("uploadfile_panel");
+    $panel->setTabNames(["My Files", "Serialized Objects", "Log Files", "File Uploader"]);
+
+    $tabContent    = array();
+    $tabContent[0] = '<div class="card-body p-0" id="filecontainer">'
+                   . FilePresentation::getFileListAsTable($page->getUser()->getMyFilesAsResultSet(), $page->getObjDB(), true)
+                   . '</div>';
+
+    $tabContent[1] = '<div class="card-body p-0" id="objectcontainer">'
+                   . SerializedObjectPresentation::getObjectListAsTable($page->getUser()->getMyObjectsAsResultSet(), $page->getObjDB(), true)
+                   . '</div>';
+
+    $tabContent[2] = '<div class="card-body p-0" id="logfilecontainer">'
+                   . FilePresentation::getFileListAsTable($page->getUser()->getMyLogFilesAsResultSet(), $page->getObjDB(), true)
+                   . '</div>';
+
+    $tabContent[3] = getFileUploadForm("services/uploadFileService.php");
+
+    $panel->setTabContent($tabContent);
+    return $panel->getComponent();
+}
+
+
+/**
+ * Builds and returns a Bootstrap file upload component targeting the given endpoint.
+ *
+ * After a successful upload, three action functions are called in sequence:
+ * - `loadFiles()`  — refreshes the My Files tab content via AJAX.
+ * - `loadLogs()`   — refreshes the Log Files tab content via AJAX.
+ * - `loadTab()`    — reinitialises DataTables and switches the panel back
+ *                    to the My Files tab so the new file is immediately visible.
+ *
+ * Uses the global `$page` for the uploader component context.
+ *
+ * @param  string $address URL of the upload service endpoint
+ * @return string          HTML string of the rendered file upload component
+ */
+function getFileUploadForm(string $address): string
+{
+    global $page;
+
+    $fileName = "uploadFile";
+    $input    = new BootstrapFileUpload();
+    $input->setName($fileName);
+    $input->setID($fileName);
+    $input->setTarget($address);
+    $input->setPage($page);
+
+    // Three callbacks run after every successful upload
+    $input->setActionFunctions(["loadFiles();", "loadLogs();", "loadTab();"]);
+
+    return $input->getComponent();
+}
+
+
+/**
+ * Returns inline JavaScript functions for refreshing file and log tab contents.
+ *
+ * Provides three functions used as post-upload callbacks and general-purpose
+ * refreshers:
+ *
+ * - `loadFiles()` — fetches the current user's file list from `fileService.php`
+ *                   and replaces the content of `#filecontainer`.
+ * - `loadLogs()`  — fetches the current user's log file list from `logfileService.php`
+ *                   and replaces the content of `#logfilecontainer`.
+ * - `loadTab()`   — reinitialises any DataTables on the page (with `destroy: true`
+ *                   to handle re-initialisation) and programmatically switches the
+ *                   tabbed panel back to Tab 0 (My Files).
+ *
+ * Uses native XMLHttpRequest rather than jQuery AJAX for the file/log loaders.
+ *
+ * @return string An HTML <script> block containing all three functions
+ */
+function getFileUpdater(): string
+{
+    return '<script type="text/javascript">
+
+    /** Refresh the My Files tab with the latest file list */
+    function loadFiles(){
+        var xmlhttp = new XMLHttpRequest();
+        xmlhttp.onreadystatechange = function(){
+            if(xmlhttp.readyState == 4 && xmlhttp.status == 200){
+                document.getElementById("filecontainer").innerHTML = xmlhttp.responseText;
+            }
+        };
+        xmlhttp.open("GET", "services/fileService.php", true);
+        xmlhttp.send();
+    }
+
+    /** Refresh the Log Files tab with the latest log file list */
+    function loadLogs(){
+        var xmlhttp1 = new XMLHttpRequest();
+        xmlhttp1.onreadystatechange = function(){
+            if(xmlhttp1.readyState == 4 && xmlhttp1.status == 200){
+                document.getElementById("logfilecontainer").innerHTML = xmlhttp1.responseText;
+            }
+        };
+        xmlhttp1.open("GET", "services/logfileService.php", true);
+        xmlhttp1.send();
+    }
+
+    /**
+     * Reinitialise DataTables and switch the panel back to the My Files tab.
+     * destroy:true is required to allow DataTables to be reinitialised on
+     * elements that were already initialised before the content was replaced.
+     */
+    function loadTab(){
+        $(".responsive").DataTable({ paging: false, destroy: true });
+        $("[href=\"#uploadfile_panel_pane_0\"]").tab("show");
+    }
+
+    </script>';
+}
+
+
+/**
+ * Returns the object deletion confirmation modal and its associated JavaScript.
+ *
+ * Provides:
+ * - A confirmation modal (`deleteObj`) that asks for confirmation before deletion.
+ * - `delObj(fid)` — called from the delete button in the object list; stores the
+ *   object ID and triggers the confirmation modal.
+ * - `deleteObject()` — executes on modal confirmation; calls `deleteFileService.php`
+ *   with the object ID and replaces `#objectcontainer` with the updated list.
+ *
+ * Uses the global `$page` for modal component context.
+ *
+ * @param  Bibliotheca_Content_Page $page The current page instance
+ * @return string                         HTML and <script> blocks for the modal and handlers
+ */
+function getObjectDeleter($page): string
+{
+    global $page;
+
+    $confirm2 = new Modal_Confirm($page, "deleteObj", "This will permanently delete the object : Are you sure?");
+    $str      = $confirm2->getConfirmMessageBody() . $confirm2->getNonForwardJavaScript("deleteObject()");
+
+    $str .= '<script type="text/javascript">
+        var file = null; // stores the object ID pending confirmation
+
+        /** Store the object ID and open the confirmation modal */
+        function delObj(fid){
+            file = fid;
+            deleteObj_func();
+        }
+
+        /** Execute deletion after confirmation; refresh the object list on success */
+        function deleteObject(){
+            $.ajax({
+                url:      "./services/deleteFileService.php?object_id=" + file,
+                type:     "GET",
+                dataType: "html",
+                success: function(data){
+                    $("#objectcontainer").html(data);
+                }
+            });
+        }
+    </script>';
+
+    return $str;
+}
+
+
+/**
+ * Returns the file deletion confirmation modal and its associated JavaScript.
+ *
+ * Provides:
+ * - A confirmation modal (`deletePrompt`) that asks for confirmation before deletion.
+ * - `delClick(fid, log)` — called from the delete button in the file list; stores the
+ *   file ID and a flag indicating whether it is a log file, then triggers the modal.
+ * - `deleteFile()` — executes on confirmation; calls `deleteFileService.php` with the
+ *   file ID and updates either `#logfilecontainer` (if log=1) or `#filecontainer`.
+ *
+ * The `log` flag allows the same deletion service and confirmation flow to be reused
+ * for both regular files and log files, with the correct container refreshed afterwards.
+ *
+ * Uses the global `$page` for modal component context.
+ *
+ * @param  Bibliotheca_Content_Page $page The current page instance
+ * @return string                         HTML and <script> blocks for the modal and handlers
+ */
+function getFileDeleter($page): string
+{
+    global $page;
+
+    $confirm = new Modal_Confirm($page, "deletePrompt", "This will permanently delete the file : Are you sure?");
+    $str     = $confirm->getConfirmMessageBody() . $confirm->getNonForwardJavaScript("deleteFile()");
+
+    $str .= '<script type="text/javascript">
+        var file    = null; // stores the file ID pending confirmation
+        var logFile = null; // 1 if this is a log file, 0 otherwise
+
+        /** Store the file ID and log flag, then open the confirmation modal */
+        function delClick(fid, log){
+            file    = fid;
+            logFile = log;
+            deletePrompt_func();
+        }
+
+        /**
+         * Execute deletion after confirmation.
+         * Refreshes #logfilecontainer for log files, #filecontainer for regular files.
+         */
+        function deleteFile(){
+            $.ajax({
+                url:      "./services/deleteFileService.php?file_id=" + file,
+                type:     "GET",
+                dataType: "html",
+                success: function(data){
+                    if(logFile == 1) $("#logfilecontainer").html(data);
+                    else             $("#filecontainer").html(data);
+                }
+            });
+        }
+    </script>';
+
+    return $str;
+}
+
+?>

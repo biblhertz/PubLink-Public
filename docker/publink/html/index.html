@@ -1,0 +1,95 @@
+<?php
+/**
+ * login.php
+ *
+ * Login Page
+ *
+ * Renders the application login page and handles local (email/password)
+ * authentication. Supports two authentication paths:
+ *
+ * 1. **Local authentication** (`emailLoginButton`) — Validates the submitted
+ *    email and password via {@see Login::localAuthenticate()}. On success,
+ *    redirects to `profile.html?login=true`. On failure, re-renders the login
+ *    page with a modal error message and repopulates the email field.
+ *
+ * 2. **ORCID authentication** — Handled externally; this page only sets the
+ *    post-login redirect target for ORCID on remote Docker environments.
+ *    The ORCID login flow itself is managed by the page component.
+ *
+ * The page is instantiated with a guest-mode flag (`1`) so that
+ * unauthenticated users can access it without being redirected.
+ *
+ * Request parameters:
+ * - `emailLoginButton` (any, optional)  — Triggers local authentication.
+ *   - `email`          (string, required) — The user's email address.
+ *   - (password field is expected by Login::localAuthenticate via $_REQUEST)
+ * - `loginFail`        (any, optional)  — When present (set internally on
+ *                                         failed auth), displays the error modal.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\Config;
+use Biblhertz\Publink\utilities\Login;
+
+// Instantiate in guest mode (argument 1) so unauthenticated users are not
+// redirected away before they have a chance to log in.
+$page = new Bibliotheca_Content_Page(1);
+
+// Set the target page to redirect to after a successful login
+$page->setLoginTarget("index.html");
+
+// ORCID login is only available in remote Docker environments.
+// When enabled, a successful ORCID login redirects to the profile page
+// with the login flag set so it can perform first-visit setup if needed.
+if (Config::$ORCID_INTEGRATION) {
+    $page->setOrcidLoginTarget("profile.html?login=true");
+}
+
+// ----------------------------------------------------------------
+// Handle local (email/password) authentication
+//
+// On success: redirect to the profile page and exit.
+// On failure: set loginFail in the request so the error modal renders below.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['emailLoginButton'])) {
+    $auth = Login::localAuthenticate($_REQUEST, $page);
+
+    if (!$auth) {
+        // Flag the failed attempt so the error modal is shown on the
+        // re-rendered login page without a separate redirect.
+        $_REQUEST['loginFail'] = true;
+    } else {
+        // Redirect to the profile page on successful authentication.
+        // The login=true parameter allows the profile page to perform
+        // any first-login initialisation steps.
+        header('Location: profile.html?login=true');
+        exit;
+    }
+}
+
+// ----------------------------------------------------------------
+// Display login failure modal
+//
+// Triggered either by a failed emailLoginButton submission above,
+// or if loginFail is set directly in the request (e.g. after an
+// ORCID login failure handled externally).
+// The user's email is repopulated in the login form to avoid them
+// having to retype it after a failed attempt.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['loginFail'])) {
+    $message = "<ul><li>Error: Could not login successfully :: check your credentials</li></ul><hr/>";
+    $modal   = new Modal_Alert($page, "loginFail", $message);
+    $modal->setOnPageLoad(true);  // open the modal immediately on page load
+    $modal->setConfirmDialog();
+    $page->setLoginName($_REQUEST['email']); // repopulate the email field
+}
+
+// Render the login page (not the standard content page — no nav/auth wrapper)
+echo $page->getLoginPage();
+
+?>

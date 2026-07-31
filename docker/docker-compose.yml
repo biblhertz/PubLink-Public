@@ -1,0 +1,122 @@
+
+
+networks:
+  publink-network:
+    driver: bridge
+
+services:
+
+  web:
+    build:
+     context: .
+     dockerfile: nginx.Dockerfile
+    restart: always
+    container_name: web
+    ports:
+      - '80:80'
+      - '443:443'
+      - '3000:3000'
+    environment:
+      MIRADOR_CLIENT: ${MIRADOR_CLIENT}
+    depends_on:
+      - php-fpm
+    networks:
+      - publink-network
+   
+
+  php-fpm:
+    build: 
+      context: .
+      dockerfile: php.Dockerfile
+    restart: always
+    container_name: php
+    environment:
+      XML_CATALOG_FILES: /var/www/xsd/catalog.xml
+      LIBXML_CATALOG_DEBUG: 1
+      SITE_ROOT: ${SITE_ROOT}
+      DB_PASSWORD: ${DB_PASSWORD}
+      ENCRYPT_KEY: ${ENCRYPT_KEY}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+      MANIFEST_SERVER_INTEGRATION: ${MANIFEST_SERVER_INTEGRATION:-false}
+      MANIFEST_SERVER_URI: ${MANIFEST_SERVER_URI:-}
+      CROSSREF_INTEGRATION: ${CROSSREF_INTEGRATION:-true}
+      CROSSREF_EMAIL: ${CROSSREF_EMAIL:-}
+      GOOGLE_BOOKS_API_KEY: ${GOOGLE_BOOKS_API_KEY:-}
+      ORCID_INTEGRATION: ${ORCID_INTEGRATION:-false}
+      ORCID_CLIENT_ID: ${ORCID_CLIENT_ID:-}
+      ORCID_CLIENT_SECRET: ${ORCID_CLIENT_SECRET:-}
+      ORCID_OATH_ADDRESS: ${ORCID_OATH_ADDRESS:-https://orcid.org/oauth/token}
+      ORCID_API_ADDRESS: ${ORCID_API_ADDRESS:-https://api.orcid.org/v3.0/}
+      PRIMO_INTEGRATION: ${PRIMO_INTEGRATION:-false}
+      PRIMO_API_KEY: ${PRIMO_API_KEY:-}
+      PRIMO_VID: ${PRIMO_VID:-}
+      PRIMO_URI: ${PRIMO_URI:-}
+      PUBLICATION: ${PUBLICATION:-false}
+      PUBLICATION_PUBLISH_API: ${PUBLICATION_PUBLISH_API:-}
+      PUBLICATION_REMOVE_API: ${PUBLICATION_REMOVE_API:-}
+      PUBLICATION_ENDPOINT: ${PUBLICATION_ENDPOINT:-}
+      PUBLICATION_CREDS: ${PUBLICATION_CREDS:-}
+      TEIPUB_INTEGRATION: ${TEIPUB_INTEGRATION:-false}
+      TEIPUB_URI: ${TEIPUB_URI:-}
+      MIRADOR_CLIENT: ${MIRADOR_CLIENT}
+    links:
+      - mysql:mysql
+      - beanstalkd:beanstalkd
+    depends_on:
+       - mysql
+      # - composer
+       - beanstalkd
+    volumes:
+       - ./local-data:/var/www/file_store:rw 
+    networks:
+      - publink-network
+
+  mysql:
+    build: 
+      context: .
+      dockerfile: mysql.Dockerfile
+    restart: always
+    command: --max_allowed_packet=1G
+    container_name: mysql
+    environment:
+      # Password for root access
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+      MYSQL_DATABASE: bibliotheca
+      MYSQL_USER: bibliotheca_user
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    ports:
+      # <Port exposed> : <MySQL Port running inside container>
+      - '3306:3306'
+    expose:
+      # Opens port 3306 on the container
+      - '3306'
+   # volumes:
+   #  - db_data:/var/lib/mysql
+    networks:
+      - publink-network
+  
+  beanstalkd:
+    build:
+      context: .
+      dockerfile: beanstalkd.Dockerfile
+    restart: always
+    container_name: beanstalkd
+    ports:
+      # <Port exposed>
+      - '11300:11300'
+      - '8192:8192'
+    networks:
+      - publink-network
+
+  tei-publisher:
+    image: existdb/teipublisher:latest
+    container_name: tei-publisher
+    profiles:
+      - tei
+    restart: always
+    ports:
+      - '8080:8080'
+    networks:
+      - publink-network
+

@@ -1,0 +1,277 @@
+<?php
+/**
+ * superUserControl.php
+ *
+ * Admin Control Panel
+ *
+ * Provides administrators with direct control over the background job queue.
+ * All actions on this page are restricted to admin users — non-admin requests
+ * are silently ignored.
+ *
+ * Actions (handled before page render):
+ * - `stopJobQueue` — Immediately stops the job queue and deletes all pending
+ *   and active jobs. This is a destructive operation intended only for recovery
+ *   from a stuck or broken queue state. The user is warned via a confirmation
+ *   modal before this action is triggered.
+ * - `startButton`  — Starts the job queue process if it is not already running.
+ *
+ * The page detects whether the queue process is currently running and renders
+ * either a Start or Stop button accordingly, ensuring only the contextually
+ * appropriate action is available at any time.
+ *
+ * @author Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\htmlPage;
+use Biblhertz\Publink\pages\Modal_Confirm;
+use Biblhertz\Publink\om\Job;
+use Biblhertz\Publink\om\JobQueue;
+use Biblhertz\Publink\om\SerializedObject;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+// ----------------------------------------------------------------
+// Admin action: stop the job queue
+//
+// Stops the queue process and deletes all jobs, including any
+// currently processing. Should only be used to recover from
+// queue problems — see the confirmation modal warning below.
+// Non-admin requests are silently ignored.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['stopJobQueue'])) {
+    if ($page->getUser()->isAdmin()) {
+        // Unlock any reference checker articles before wiping the queue.
+        $refJobs = $page->getObjDB()->preparedSelect(
+            "SELECT task_name, parameters FROM job WHERE task_name LIKE '%Reference Checker%'",
+            []
+        );
+        while ($row = $refJobs->fetch()) {
+            unlockReferenceCheckerArticle($page->getObjDB(), $row);
+        }
+        Job::stopTask($page->getObjDB());
+        header('Location: superUserControl.html');
+        exit;
+    }
+}
+
+// ----------------------------------------------------------------
+// Admin action: start the job queue
+//
+// Starts the queue process if it is not already running.
+// Non-admin requests are silently ignored.
+// ----------------------------------------------------------------
+if (isset($_REQUEST['startButton'])) {
+    if ($page->getUser()->isAdmin()) {
+        Job::startTask();
+        // Brief pause so the worker has time to appear in pgrep before redirect.
+        sleep(1);
+        header('Location: superUserControl.html');
+        exit;
+    }
+}
+
+// ----------------------------------------------------------------
+// Admin action: cancel a single job
+//
+// Deletes the specified job row from the active queue.
+// The worker may finish its current in-flight invocation but
+// the result will no longer be associated with any queue entry.
+// ----------------------------------------------------------------
+if (isset($_POST['cancelJob']) && $page->getUser()->isAdmin()) {
+    $jobId = isset($_POST['job_id']) && is_numeric($_POST['job_id'])
+           ? (int) $_POST['job_id'] : 0;
+    if ($jobId > 0) {
+        // Unlock the article immediately (handles queued jobs that haven't started yet).
+        // Running jobs unlock themselves when they detect the CANCELLED status.
+        $row = $page->getObjDB()->preparedSelect(
+            "SELECT task_name, parameters FROM job WHERE id = ?", [$jobId]
+        )->fetch();
+        if ($row) unlockReferenceCheckerArticle($page->getObjDB(), $row);
+
+        // Soft-cancel: signal the running job script to stop at its next checkpoint.
+        // The worker archives the row once the script exits; do not hard-delete here.
+        $page->getObjDB()->preparedStatement(
+            "UPDATE job SET status = 'CANCELLED' WHERE id = ?", [$jobId]
+        );
+        header('Location: superUserControl.html');
+        exit;
+    }
+}
+
+try {
+
+    $page->setHeading("Control Panel");
+
+    // ----------------------------------------------------------------
+    // Stop queue confirmation modal
+    //
+    // Uses a true/false dialog style so the user must explicitly confirm
+    // before the stop form is submitted. The modal is triggered by the
+    // Stop button's form submission intercepted by 'stopQueue_func()'.
+    // The warning message clearly communicates the destructive consequences.
+    // ----------------------------------------------------------------
+    $message = "<h4>Stop Job Queue : use with caution !</h4><ul>
+                    <li>This will stop the queue and delete all jobs</li>
+                    <li>This includes any jobs currently processing</li>
+                    <li>Use this option only in the event of Job Queue Problems</li>
+                </ul>";
+
+    $modal = new Modal_Confirm($page, "stopJobQueueModal", $message);
+    $modal->setConfirmTrueFalseDialog('stopQueue'); // ties the modal confirmation to the stopQueue form
+
+    $content  = "<hr/>";
+    $content .= getJobQueueButton();
+    $content .= getActiveJobsTable($page->getObjDB());
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+
+/**
+ * Returns an HTML table of all currently active (queued or running) jobs,
+ * each with a Cancel button that deletes the row from the job table.
+ *
+ * @param  \Biblhertz\Publink\utilities\PDODatabase $objDB
+ * @return string  HTML markup, or an empty string if no jobs are active.
+ */
+function getActiveJobsTable($objDB): string
+{
+    $jobs = JobQueue::getAllJobs($objDB);
+
+    $rows = '';
+    foreach ($jobs as $job) {
+        $id       = (int) $job->getID();
+        $task     = htmlspecialchars($job->getTask()->getName(),    ENT_QUOTES, 'UTF-8');
+        $user     = htmlspecialchars($job->getUser()->getName(),    ENT_QUOTES, 'UTF-8');
+        $status   = htmlspecialchars($job->getStatus() ?: 'Queued', ENT_QUOTES, 'UTF-8');
+        $submitted = htmlspecialchars($job->getSubmittedAt(),       ENT_QUOTES, 'UTF-8');
+
+        $rows .= '<tr>'
+               . '<td>' . $id       . '</td>'
+               . '<td>' . $task     . '</td>'
+               . '<td>' . $user     . '</td>'
+               . '<td>' . $status   . '</td>'
+               . '<td>' . $submitted . '</td>'
+               . '<td>'
+               .   '<form method="POST" action="superUserControl.html"'
+               .     ' onsubmit="return confirm(\'Cancel job #' . $id . '?\')" class="mb-0">'
+               .   '<input type="hidden" name="cancelJob" value="1">'
+               .   '<input type="hidden" name="job_id"   value="' . $id . '">'
+               .   '<button type="submit" class="btn btn-sm btn-danger">'
+               .     '<i class="fas fa-times me-1"></i>Cancel</button>'
+               .   '</form>'
+               . '</td>'
+               . '</tr>';
+    }
+
+    if (!$rows) {
+        return '<div class="d-flex align-items-center mt-4 mb-2">'
+             .   '<h5 class="mb-0 mr-4">Active Jobs</h5>'
+             .   '<a href="superUserControl.html" class="btn btn-sm btn-outline-secondary">'
+             .     '<i class="fas fa-sync-alt me-1"></i>Refresh</a>'
+             . '</div>'
+             . '<div class="alert alert-secondary small">No jobs currently in the queue.</div>';
+    }
+
+    return '<div class="d-flex align-items-center mt-4 mb-2">'
+         .   '<h5 class="mb-0 mr-4">Active Jobs</h5>'
+         .   '<a href="superUserControl.html" class="btn btn-sm btn-outline-secondary">'
+         .     '<i class="fas fa-sync-alt me-1"></i>Refresh</a>'
+         . '</div>'
+         . '<table class="table table-sm table-bordered small">'
+         . '<thead class="thead-light"><tr>'
+         . '<th>ID</th><th>Task</th><th>User</th><th>Status</th><th>Submitted</th><th></th>'
+         . '</tr></thead>'
+         . '<tbody>' . $rows . '</tbody>'
+         . '</table>';
+}
+
+
+/**
+ * Returns the appropriate job queue control button based on the current
+ * queue process state.
+ *
+ * Checks whether the queue process is currently running via
+ * {@see Job::queueProcessExists()}:
+ *
+ * - **Queue running** — renders a Stop button that submits the `stopQueue`
+ *   form. The form posts `stopJobQueue=true` to this page. The confirmation
+ *   modal intercepts the submission before it reaches the server, requiring
+ *   the admin to confirm the destructive action.
+ *
+ * - **Queue stopped** — renders a Start button that submits the `startQueue`
+ *   form. No confirmation is required to start the queue.
+ *
+ * Both buttons are wrapped in Bootstrap input-group divs for consistent layout.
+ *
+ * @return string HTML string containing the appropriate form and button
+ */
+function getJobQueueButton(): string
+{
+    $started = Job::queueProcessExists();
+
+    if ($started) {
+        // Queue is running — offer a (confirmation-gated) stop action
+        return "<div class=\"input-group mb-3\">
+            <form action='superUserControl.html' method='POST' id='stopQueue'>
+                <button type=\"submit\" class=\"btn btn-outline-secondary btn-block float-right\" id=\"stopButton\" name=\"stopButton\">
+                    <input type=\"hidden\" name=\"stopJobQueue\" value=\"true\" />
+                    <span class=\"fas fa-stop-circle\"></span>
+                    Stop Job Queue
+                </button>
+            </form>
+        </div>";
+    } else {
+        // Queue is stopped — offer a start action (no confirmation required)
+        return "<div class=\"input-group mb-3\">
+            <form action='superUserControl.html' method='POST' id='startQueue'>
+                <button type=\"submit\" class=\"btn btn-outline-secondary btn-block float-right\" id=\"startButton\" name=\"startButton\">
+                    <span class=\"fas fa-start-circle\"></span>
+                    Start Job Queue
+                </button>
+            </form>
+        </div>";
+    }
+}
+
+
+/**
+ * Unlocks a reference checker article when its job is cancelled or the queue is stopped.
+ *
+ * Decodes the job's parameters to find the serialized object ID, loads the article,
+ * and clears the readOnly and referenceCheck flags so the article can be edited again.
+ * Does nothing if the job is not a reference checker type, or if the object cannot be loaded.
+ *
+ * @param  \Biblhertz\Publink\utilities\PDODatabase $objDB
+ * @param  array $jobRow  Row from the job table with at least task_name and parameters.
+ */
+function unlockReferenceCheckerArticle($objDB, array $jobRow): void
+{
+    if (stripos($jobRow['task_name'], 'Reference Checker') === false) return;
+
+    $params = json_decode($jobRow['parameters'], true);
+    $oid    = $params['object_id'] ?? null;
+    if (!$oid) return;
+
+    try {
+        $obj     = new SerializedObject($objDB, (int) $oid);
+        $article = unserialize($obj->getObject());
+        if (is_object($article) && method_exists($article, 'setReferenceCheck')) {
+            $article->setReferenceCheck(false);
+            $article->setReadOnly(false);
+            $obj->updateObject($article);
+        }
+    } catch (\Throwable $e) {
+        error_log("unlockReferenceCheckerArticle: failed for oid=$oid: " . $e->getMessage());
+    }
+}
+
+?>

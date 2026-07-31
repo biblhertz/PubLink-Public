@@ -1,0 +1,216 @@
+<?php
+/**
+ * uploadFile.php
+ *
+ * File Upload Page (JATS / BibTeX)
+ *
+ * Renders a file upload interface for either JATS XML or BibTeX files,
+ * depending on the presence of the `bib` request parameter. The uploaded
+ * file is submitted to the appropriate backend service, and on success a
+ * JavaScript callback refreshes the relevant sidebar menu via an AJAX call
+ * to jatsMenuService.php.
+ *
+ * If the user has just logged in (`login` parameter present), a modal alert
+ * is shown on page load. First-time users additionally see a message
+ * confirming that their details have been stored in the PubLink database.
+ *
+ * If a job queue result message is passed via the request, it is displayed
+ * as a modal alert on page load.
+ *
+ * Request parameters:
+ * - `bib`     (flag, optional)   — If present, switches the page to BibTeX
+ *                                  upload mode. Absent = JATS mode.
+ * - `login`   (flag, optional)   — If present, triggers the post-login modal
+ *                                  alert, including a first-login welcome if
+ *                                  applicable.
+ * - `message` (string, optional) — Job queue result message to display in a
+ *                                  modal alert on page load.
+ *
+ * @author Chris Tomlinson
+ *
+ * @todo Restore or remove the commented-out Config::isRemoteDocker() condition
+ *       around the TEST server warning message.
+ */
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\pages\Modal_Confirm;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\components\BootstrapFileUpload;
+use Biblhertz\Publink\om\File;
+use Biblhertz\Publink\om\presentation\FilePresentation;
+use Biblhertz\Publink\om\presentation\SerializedObjectPresentation;
+use Biblhertz\Publink\pages\Modal_Alert;
+use Biblhertz\Publink\Config;
+
+$page = new Bibliotheca_Content_Page();
+
+// Set the page heading based on upload mode
+if (isset($_REQUEST['bib'])) {
+    $page->setHeading("Bibtex Upload");
+} else {
+    $page->setHeading("JATS Upload");
+}
+
+try {
+    if (isset($_REQUEST['login'])) {
+        // ----------------------------------------------------------------
+        // Post-login modal alert
+        //
+        // Shown immediately after the user logs in. Currently always
+        // includes the TEST server warning. First-time users additionally
+        // see a confirmation that their details have been stored.
+        // ----------------------------------------------------------------
+        $page->shakeOnLoad();
+        $message = "";
+
+        // NOTE: Config::isRemoteDocker() check is currently disabled —
+        // the TEST server warning is shown unconditionally.
+        // if (Config::isRemoteDocker()) {
+        $message .= "<p>This is a <b>TEST</b> server. Your files may be deleted "
+                  . "at any time as new builds are developed. Be sure to download "
+                  . "anything that you want to keep before you log off.</p><hr/>";
+        // }
+
+        if ($page->getUser()->isFirstLogin()) {
+            // Record that the user has completed their first login and
+            // append the first-login welcome message
+            $page->getUser()->hasLoggedInForFirstTime();
+            $message .= "<p>Your details have been stored in the PubLink Database. "
+                      . "This includes your name, email address and ORCiD "
+                      . "(if supplied)</p><hr/>";
+        }
+
+        $alert = new Modal_Alert($page, "login_message", $message);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+
+    } elseif (isset($_REQUEST['message'])) {
+        // ----------------------------------------------------------------
+        // Job queue result modal
+        //
+        // Displayed when a background job has completed or failed and
+        // redirected back to this page with a result message.
+        // ----------------------------------------------------------------
+        $alert = new Modal_Alert($page, "job_queue_message", $_REQUEST['message']);
+        $alert->setOnPageLoad(true);
+        $alert->setConfirmDialog();
+    }
+
+    // Render the upload panel at 8/12 column width
+    $content = '<div class="col-8 col-sm-8">' . getFileUploader() . '</div>';
+    $page->setCentralContent($content);
+
+} catch (Exception $e) {
+    // Surface the exception message as page content.
+    // TODO: replace with $page->handleException($e) for consistency
+    // with other pages and to avoid leaking implementation details.
+    $page->setCentralContent($e->getMessage());
+}
+
+echo $page->getPage();
+
+
+/**
+ * Builds and returns the tabbed upload panel component.
+ *
+ * Creates a single-tab BootstrapTabbedPanel whose content is the file upload
+ * form combined with the post-upload menu refresh script. The panel title
+ * reflects the current upload mode (JATS or BibTeX).
+ *
+ * @return string Rendered HTML for the tabbed upload panel.
+ */
+function getFileUploader(): string
+{
+    global $page;
+
+    $isBib = isset($_REQUEST['bib']);
+
+    $panel = new BootstrapTabbedPanel();
+    $panel->setTitle($isBib ? "Bibtex Files" : "JATS Files");
+    $panel->setName("uploadfile_panel");
+
+    $serviceUrl = $isBib
+        ? "services/uploadFileService.php?bib=true"
+        : "services/uploadFileService.php?jats=true";
+
+    $panel->setTabNames(["File Uploader"]);
+    $panel->setTabContent([
+        getFileUploadForm($serviceUrl) . getMenuUpdater()
+    ]);
+
+    return $panel->getComponent();
+}
+
+
+/**
+ * Builds and returns the file upload form component.
+ *
+ * Configures a BootstrapFileUpload input that posts to the given service URL.
+ * On successful upload the `jatsUpload()` JavaScript callback is invoked,
+ * which refreshes the sidebar menu via AJAX (see {@see getMenuUpdater()}).
+ *
+ * @param  string $address URL of the backend upload service to post the file to.
+ * @return string          Rendered HTML for the file upload form.
+ */
+function getFileUploadForm(string $address): string
+{
+    global $page;
+
+    $fileName = "uploadFile";
+
+    $input = new BootstrapFileUpload();
+    $input->setName($fileName);
+    $input->setID($fileName);
+    $input->setTarget($address);
+    $input->setPage($page);
+    $input->setActionFunctions(["jatsUpload()"]);
+
+    return $input->getComponent();
+}
+
+
+/**
+ * Returns a `<script>` block containing the post-upload menu refresh logic.
+ *
+ * Defines the `jatsUpload()` async function, which is called by the file
+ * upload component after a successful upload. It fetches updated menu HTML
+ * from jatsMenuService.php and injects it into the appropriate sidebar menu
+ * element, then calls `menuLoad()` to re-initialise any menu behaviour.
+ *
+ * The target menu ID is determined by the current upload mode:
+ * - BibTeX mode → `bibMenu`
+ * - JATS mode   → `jatsMenu`
+ *
+ * @return string A `<script>` block defining the `jatsUpload()` function.
+ */
+function getMenuUpdater(): string
+{
+    $menu = isset($_REQUEST['bib']) ? "bibMenu" : "jatsMenu";
+
+    return <<<JS
+    <script type="text/javascript">
+
+        /**
+         * Refreshes the sidebar menu after a successful file upload.
+         *
+         * Fetches updated menu HTML from jatsMenuService.php and replaces
+         * the content of the menu element, then re-initialises menu behaviour
+         * by calling menuLoad().
+         */
+        async function jatsUpload() {
+            await $.ajax({
+                url: './services/jatsMenuService.php?menu={$menu}',
+                type: 'GET',
+                dataType: 'html',
+                success: function (text) {
+                    document.getElementById("{$menu}").innerHTML = text;
+                    menuLoad();
+                }
+            });
+        }
+
+    </script>
+    JS;
+}
+?>

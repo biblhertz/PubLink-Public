@@ -1,0 +1,91 @@
+<?php
+/**
+ * userStats.php
+ *
+ * Publink Usage Statistics Page
+ *
+ * Displays a summary table of intranet usage across all users who have at
+ * least one log entry in user_intranet_log. Each row shows the user's name
+ * (linked to their profile), a link to their detailed usage pattern page,
+ * and a count of their distinct sessions.
+ *
+ * A summary line above the table shows the total number of users and
+ * sessions, and links to the Most Recent Sessions page.
+ *
+ * No request parameters are required.
+ *
+ * @author Chris Tomlinson
+ *
+ * @todo Replace the per-user session count query inside the loop with a
+ *       single JOIN/GROUP BY query to avoid N+1 database calls.
+ * @todo Replace getOne() with a prepared statement — the user_details_id
+ *       value is interpolated directly into the SQL string.
+ * @todo Fix the double ampersand in the userUsage.html link query string
+ *       (`&&name=` should be `&name=`).
+ */
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Publink\pages\htmlPage;
+
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+
+try {
+    $page->setHeading("Publink Usage Statistics");
+
+    // Fetch all users who appear in the intranet log, ordered by last name.
+    // The implicit join filters out users who have never logged in.
+    $data = $page->getObjDB()->select(
+        "SELECT DISTINCT(user_details_id), first_name, last_name
+           FROM user_details, user_intranet_log
+          WHERE user_details_id = user_details.id
+          ORDER BY last_name"
+    );
+
+    $userCount     = $data->rowCount();
+    $totalSessions = 0;
+
+    $str  = '<table class="table table-bordered">';
+    $str .= '<tr><th>Name</th><th>Intranet Usage</th><th>Logons</th></tr>';
+
+    while ($d = $data->fetch()) {
+        $uid      = $d['user_details_id'];
+        $fullName = $d['first_name'] . ' ' . $d['last_name'];
+
+        // TODO: this issues one query per user (N+1 problem). Replace with
+        // a single query using COUNT(DISTINCT user_session_id) ... GROUP BY
+        // user_details_id joined onto the outer result set.
+        $sessions = $page->getObjDB()->preparedGetOne(
+            "SELECT COUNT(DISTINCT(user_session_id))
+               FROM user_intranet_log
+              WHERE user_details_id = ?",array($uid)
+        );
+
+        $str .= '<tr>'
+              . '<td>' . htmlPage::makeLink("user.html?uid=" . $uid, $fullName) . '</td>'
+              . '<td>' . htmlPage::makeLink("userUsage.html?pid=" . $uid . "&name=" . $fullName, "Usage Pattern") . '</td>'
+              // TODO: original used `&&name=` (double ampersand) — corrected to `&name=` above.
+              . '<td>' . $sessions . '</td>'
+              . '</tr>';
+
+        $totalSessions += $sessions;
+    }
+
+    $str .= '</table>';
+
+    $content .= '<p>'
+              . $userCount . ' users, ' . $totalSessions . ' sessions. | '
+              . $page->makeLink("latestSessions.html", "Most Recent Sessions")
+              . '</p>'
+              . $str;
+
+} catch (Exception $e) {
+   $page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>

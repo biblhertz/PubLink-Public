@@ -1,0 +1,113 @@
+<?php
+/**
+ * user.php
+ *
+ * Add / Edit User Page
+ *
+ * Handles both the display and submission of the user add/edit form.
+ * Accepts an optional numeric `uid` request parameter to load an existing
+ * user for editing. When `uid` is 0 or absent, a new user record is prepared.
+ *
+ * Request parameters:
+ * - `uid`        (int, optional)  — ID of the user to edit. Omit or set to 0 for a new user.
+ * - `updateUser` (any, optional)  — When present, triggers form validation and save.
+ *
+ * On successful save, redirects to `user.html?uid={id}` with the saved user's ID.
+ * On validation failure, displays a modal alert listing the errors.
+ *
+ * @author  Chris Tomlinson
+ */
+
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\components\BootstrapTabbedPanel;
+use Biblhertz\Publink\om\User;
+use Biblhertz\Publink\om\presentation\UserPresentation;
+use Biblhertz\Publink\pages\Modal_Alert;
+
+// Initialise the page wrapper and output buffer
+$page    = new Bibliotheca_Content_Page();
+$content = "";
+$openTab = 0;
+
+try {
+
+    // ----------------------------------------------------------------
+    // Resolve user ID
+    // Accept uid from the request only if it is a positive integer.
+    // A uid of 0 signals that a new user should be created.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['uid']) && is_numeric($_REQUEST['uid']) && $_REQUEST['uid'] > 0)
+        $uid = $_REQUEST['uid'];
+    else
+        $uid = 0;
+
+    // Load or initialise the User object from the database
+    $user = new User($page->getObjDB(), $uid);
+
+    // ----------------------------------------------------------------
+    // Handle form submission
+    // Triggered when the form posts back with the 'updateUser' parameter.
+    // ----------------------------------------------------------------
+    if (isset($_REQUEST['updateUser'])) {
+
+        // Validate posted form data against business rules.
+        // Returns an array of error message strings; empty on success.
+        $errors = UserPresentation::validateForm($_REQUEST, $page->getObjDB(), $user);
+
+        if (!count($errors)) {
+            // Validation passed — persist the user and redirect to the
+            // updated record to prevent duplicate form submission on reload.
+            $id = $user->updateUser($_REQUEST);
+            header("Location: user.html?uid=$id");
+            exit;
+
+        } else {
+            // Validation failed — build an error list and show it in a
+            // modal alert dialog that opens automatically on page load.
+            $errstr = "<h2>Errors in Form</h2><ul>";
+            foreach ($errors as $err) $errstr .= "<li>$err</li>";
+            $errstr .= "</ul>";
+
+            $modal = new Modal_Alert($page, "formErrors", $errstr);
+            $modal->setOnPageLoad(true);   // open immediately when page renders
+            $modal->setConfirmDialog();    // show as a confirmation-style dialog
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Build the page UI
+    // Wrap the user form in a tabbed panel component.
+    // ----------------------------------------------------------------
+
+    /** @var UserPresentation $presentation Handles rendering the user object as HTML */
+    $presentation = new UserPresentation($user);
+
+    /** @var BootstrapTabbedPanel $panel Bootstrap tabbed panel component */
+    $panel = new BootstrapTabbedPanel();
+
+    $panel->setTitle("User Details");
+    $panel->setName("user_panel");
+
+    // Single tab: the user add/edit form.
+    // The form action is hardcoded to addUser.html; $_REQUEST is passed
+    // through so that field values are repopulated after a failed submission.
+    $panel->setTabNames(["Add New User"]);
+    $panel->setTabContent([$presentation->getAsForm("addUser.html", $_REQUEST)]);
+    $panel->setOpenTab($openTab);
+
+    $page->setHeading("Add new User");
+
+    // Wrap the panel in a responsive Bootstrap column
+    $content = '<div class="col-12 col-sm-6">' . $panel->getComponent() . '</div>';
+
+} catch (Exception $e) {
+    $page->handleException($e);
+}
+
+// Render the final page
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>

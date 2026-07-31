@@ -1,0 +1,22 @@
+<?php
+require 'vendor/autoload.php';
+
+use Biblhertz\Publink\pages\Bibliotheca_Content_Page;
+use Biblhertz\Publink\utilities\User_Session;
+
+try {
+	$page=new Bibliotheca_Content_Page();
+	$content="<div>".$page->makeLink("userStats.html","Usage Statistics by User")."</div>";
+	$page->setHeading("Latest Publink User Sessions");
+	$content.=User_Session::getLatestUserSessions($page->getObjDB());
+
+	$content="<div class=\"col-sm-6\">$content</div>";
+	
+} catch (Exception $e) {
+	$page->handleException($e);
+}
+
+$page->setCentralContent($content);
+echo $page->getPage();
+
+?>
