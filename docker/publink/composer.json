@@ -2,6 +2,7 @@
     "name": "biblhertz/publink",
     "description": "Publication linking and citation service for Bibliotheca Hertziana",
     "type": "library",
+    "license": "GPL-3.0-or-later",
     "repositories": [
         {
             "type": "package",
