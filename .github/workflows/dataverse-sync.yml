@@ -16,4 +16,4 @@ jobs:
           DATAVERSE_SERVER: https://edmond.mpg.de
           DATAVERSE_DATASET_DOI: doi:10.17617/3.OJEPZN
           DELETE: True
-          PUBLISH: True
+          PUBLISH: False
