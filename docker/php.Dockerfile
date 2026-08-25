@@ -9,7 +9,8 @@ RUN install-php-extensions imagick
 
 RUN apt-get update && apt-get install -y git \
     unzip \
-    libzip-dev
+    libzip-dev \
+    curl
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -23,6 +24,15 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN apt-get update && apt-get install -y pandoc
 
 COPY ./publink/html /var/www/html
+
+# AdminLTE 3.2.0 (dist + plugins) is fetched at build time instead of being
+# vendored in the repo — the npm package only ships dist/, so we pull the
+# full GitHub source tag, which is what the project's own repo commits.
+RUN mkdir -p /var/www/html/adminLTE && \
+    curl -fsSL https://github.com/ColorlibHQ/AdminLTE/archive/refs/tags/v3.2.0.tar.gz | tar -xz -C /tmp && \
+    cp -r /tmp/AdminLTE-3.2.0/dist /tmp/AdminLTE-3.2.0/plugins /var/www/html/adminLTE/ && \
+    rm -rf /tmp/AdminLTE-3.2.0
+
 COPY ./publink/src /var/www/src
 RUN mkdir /var/www/file_store
 RUN mkdir /var/www/file_store/user

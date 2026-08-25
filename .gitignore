@@ -22,3 +22,6 @@ docker/local-data
 /docker/.env
 .env
 
+# Fetched at Docker build time (see docker/php.Dockerfile, docker/nginx.Dockerfile)
+/docker/publink/html/adminLTE
+

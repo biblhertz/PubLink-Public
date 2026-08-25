@@ -40,6 +40,16 @@ COPY --from=build /app /var/www/mirador
 RUN mkdir /var/log/mirador
 RUN rm /etc/nginx/conf.d/default.conf
 COPY ./publink/html /var/www/html
+
+# AdminLTE 3.2.0 (dist + plugins) is fetched at build time instead of being
+# vendored in the repo — the npm package only ships dist/, so we pull the
+# full GitHub source tag, which is what the project's own repo commits.
+RUN apk add --no-cache curl tar && \
+    mkdir -p /var/www/html/adminLTE && \
+    curl -fsSL https://github.com/ColorlibHQ/AdminLTE/archive/refs/tags/v3.2.0.tar.gz | tar -xz -C /tmp && \
+    cp -r /tmp/AdminLTE-3.2.0/dist /tmp/AdminLTE-3.2.0/plugins /var/www/html/adminLTE/ && \
+    rm -rf /tmp/AdminLTE-3.2.0 && \
+    apk del curl tar
 COPY ./nginx/nginx.conf /etc/nginx/conf.d/default.conf.template
 COPY ./nginx/entrypoint.sh /docker-entrypoint.d/40-envsubst-mirador.sh
 RUN chmod +x /docker-entrypoint.d/40-envsubst-mirador.sh
