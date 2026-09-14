@@ -163,7 +163,7 @@ Other components in the same digital-publishing pipeline:
 
 ## Publications
 
-- Bastianello, E., Tomlinson, C. D. & Adamou, A. (2024). [PubLink: Editorial Workflow for Digital Scholarly Publications in the Humanities](https://doi.org/10.1145/3800935.3830875). *Proceedings of the 35th ACM Conference on Hypertext.*
+- Bastianello, E., Tomlinson, C. D. & Adamou, A. (2024). [PubLink: Editorial Workflow for Digital Scholarly Publications in the Humanities](https://doi.org/10.1145/3648188.3677051). *Proceedings of the 35th ACM Conference on Hypertext and Social Media.*
 - Bastianello, E. & Tomlinson, C. D. (2026). [Bridging Digital and Publishing in the Humanities: Connecting Editorial Workflows through Open Standards](https://doi.org/10.1145/3800935.3830875). *Proceedings of the 37th ACM Conference on Hypertext.*
 
 ---
