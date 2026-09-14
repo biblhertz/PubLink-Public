@@ -29,7 +29,6 @@ ob_start();
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             color: #111827;
         }
-
         .iiif-container { max-width: 1400px; margin: 0 auto; }
         
         .header {
@@ -301,6 +300,13 @@ ob_start();
             padding: 1px 6px; margin-left: 6px; vertical-align: middle;
             max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
+        .rotation-badge {
+            display: inline-block; font-size: 11px;
+            background: #fff7ed; color: #c2410c;
+            border: 1px solid #fed7aa; border-radius: 4px;
+            padding: 1px 6px; margin-left: 6px; vertical-align: middle;
+            white-space: nowrap;
+        }
         .rights-badge {
             display: inline-block; font-size: 11px;
             background: #f0fdf4; color: #166534;
@@ -480,7 +486,7 @@ ob_start();
 
         <div class="tabs">
             <button class="tab active" data-tab="individual">Individual Images</button>
-            <button class="tab" data-tab="comparison">Multi-Image Composition</button>
+            <button class="tab" data-tab="comparison">Comparison Layouts</button>
             <button class="tab" data-tab="layeralign">Layer Alignment</button>
             <button class="tab" data-tab="library">Manifest Library</button>
             <button class="tab" data-tab="validation">Validation & Testing</button>
@@ -517,7 +523,26 @@ ob_start();
                     <input type="number" id="imageHeight" placeholder="693">
                 </div>
             </div>
-            
+
+            <div class="form-row" style="align-items: flex-end;">
+                <div class="form-group">
+                    <label>Rotation &amp; mirror</label>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <button type="button" class="button secondary" style="padding:5px 8px;font-size:14px;" title="Rotate 90° counter-clockwise" onclick="rotateIndividualImage(-90)">↺</button>
+                        <button type="button" class="button secondary" style="padding:5px 8px;font-size:14px;" title="Rotate 90° clockwise" onclick="rotateIndividualImage(90)">↻</button>
+                        <input type="number" id="indRotation" min="0" max="359" step="1" value="0" style="width:54px;padding:4px 5px;font-size:12px;" title="Exact rotation in degrees (0–359)" onchange="setIndividualRotation(this.value)"><span style="font-size:12px;color:#555;">°</span>
+                        <button type="button" class="button secondary" id="indFlipBtn" style="padding:5px 8px;font-size:14px;" title="Mirror horizontally" onclick="flipIndividualImage()">↔</button>
+                    </div>
+                </div>
+                <div class="form-group" id="indRotationMethodGroup" style="display:none;">
+                    <label for="indRotationMethod">Rotation display method</label>
+                    <select id="indRotationMethod" onchange="updateIndividualRotationUI()">
+                        <option value="selector">ImageApiSelector (structured) — works in TheseusViewer, Annona, Clover; not Mirador</option>
+                        <option value="url">Baked into image URL — works when the image is requested directly; silently ignored by most deep-zoom viewers</option>
+                    </select>
+                </div>
+            </div>
+
             <div class="form-row" style="align-items: flex-end;">
                 <div class="form-group">
                     <label for="primaryLang">Primary language</label>
@@ -618,7 +643,7 @@ ob_start();
                 </div>
                 <div class="form-group">
                     <label for="baseUrl">Base URL</label>
-                    <input type="url" id="baseUrl" value="https://example.org/iiif_manifests/">
+                    <input type="url" id="baseUrl" placeholder="https://example.org/iiif_manifests/">
                 </div>
             </div>
             
@@ -635,9 +660,9 @@ ob_start();
             </div>
         </div>
         
-        <!-- Multi-Image Composition Tab -->
+        <!-- Comparison Layouts Tab -->
         <div id="comparison" class="tab-content">
-            <h2>Multi-Image Composition</h2>
+            <h2>Comparison Layouts</h2>
 
             <!-- Step 1: Collect images -->
             <h3>Images</h3>
@@ -665,6 +690,9 @@ ob_start();
             <p style="font-size:0.9rem; color:#555; margin-top:0;">Imported images are added to the library above so you can select a subset.</p>
 
             <h4 style="margin:20px 0 6px;">Selected for comparison</h4>
+            <div style="background:#fff3cd; border:1px solid #ffeaa7; color:#856404; padding:10px 14px; border-radius:6px; font-size:12.5px; margin-bottom:12px;">
+                <strong>⚠ Rotation display is currently unreliable in most viewers.</strong> This tool requests an already-rotated image from the IIIF server, but viewers that build their own tile requests from the image's <code>service</code> block (rather than fetching the literal image URL) can silently ignore that rotation. Verified: even a 90° rotation may not display correctly. Use rotation with this in mind until a more broadly-supported approach is added.
+            </div>
             <div class="image-list" id="comparisonImages">
                 <p><em>No images added yet. Import from the library above.</em></p>
             </div>
@@ -809,7 +837,7 @@ ob_start();
 
             <div class="form-group">
                 <label for="comparisonBaseUrl">Base URL</label>
-                <input type="url" id="comparisonBaseUrl" value="https://example.org/iiif_manifests/" oninput="saveComparisonSession()">
+                <input type="url" id="comparisonBaseUrl" placeholder="https://example.org/iiif_manifests/" oninput="saveComparisonSession()">
             </div>
 
             <button class="button" onclick="generateComparisonManifest()">Create comparison manifest</button>
@@ -981,9 +1009,16 @@ ob_start();
             <!-- Step 2: workspace -->
             <h3 style="margin-top:28px;">Step 2 — Align layers</h3>
             <p class="la-hint">Drag layers to reposition · drag corner handles to resize (hold Shift to lock aspect ratio) · arrow keys nudge 1 px (Shift = 10 px) · Delete removes selected layer.</p>
+            <div style="background:#fff3cd; border:1px solid #ffeaa7; color:#856404; padding:10px 14px; border-radius:6px; font-size:12.5px; margin-bottom:12px;">
+                <strong>⚠ Rotation display is currently unreliable in most viewers.</strong> This tool requests an already-rotated image from the IIIF server, but viewers that build their own tile requests from the image's <code>service</code> block (rather than fetching the literal image URL) can silently ignore that rotation. Verified: even a 90° rotation may not display correctly. Use rotation with this in mind until a more broadly-supported approach is added.
+            </div>
             <div style="margin-bottom:6px;">
                 <button class="button secondary" onclick="laSnapAllToCanvas()" style="font-size:12px; padding:5px 12px;">Snap all to canvas</button>
                 <span style="font-size:12px; color:#888; margin-left:8px;">Sets every layer to fill the full canvas area (useful before precise repositioning)</span>
+            </div>
+            <div style="margin-bottom:6px;">
+                <button class="button secondary" onclick="laFitCanvasToLayers()" style="font-size:12px; padding:5px 12px;">Fit canvas to layers</button>
+                <span style="font-size:12px; color:#888; margin-left:8px;">Resizes the canvas to exactly contain every layer and shifts them so nothing sits outside it (e.g. after rotating a layer past the edge)</span>
             </div>
             <div id="laCanvasSizeRow" style="display:none; margin-bottom:10px; font-size:12px; color:#555; align-items:center; gap:8px; flex-wrap:wrap;">
                 <span>Canvas size:</span>
@@ -1046,6 +1081,13 @@ ob_start();
             <div class="form-group">
                 <label for="laBaseUrl">Base URL</label>
                 <input type="url" id="laBaseUrl" placeholder="https://username.github.io/iiif-manifests/" oninput="saveLayerSession()">
+            </div>
+            <div class="form-group">
+                <label for="laRotationMethod">Rotation display method <span style="font-size:11px;color:#7f8c8d;font-weight:normal;">(only affects layers that are actually rotated/mirrored)</span></label>
+                <select id="laRotationMethod" onchange="saveLayerSession()">
+                    <option value="selector">ImageApiSelector (structured) — for a multi-layer canvas like this, confirmed working only in a patched Tify fork so far; Mirador, Annona, TheseusViewer and Clover all fail differently on multiple rotated layers composited together</option>
+                    <option value="url">Baked into image URL — works when the image is requested directly; silently ignored by every deep-zoom viewer tested</option>
+                </select>
             </div>
             <button class="button" onclick="laGenerate()">Generate manifest</button>
             <button class="button secondary" onclick="laClearWorkspace()">Clear workspace</button>
@@ -1187,6 +1229,7 @@ ob_start();
         let selectedLibraryItems = new Set();
 
         let currentIndividualManifest = null;
+        let currentImageProfile = 'level2';
         let currentComparisonManifest = null;
         let selectedViewer = 'universal';
         let advancedOptionsVisible = false;
@@ -1469,6 +1512,18 @@ ob_start();
         }
 
         // Auto-fetch IIIF info
+        // Extracts a clean "level0"/"level1"/"level2" from an info.json response's
+        // profile field (IIIF Image API 3.0 uses a plain string, 2.x an array whose
+        // first element is a profile URL) or an existing manifest's service.profile.
+        // Defaults to "level2" only when the source genuinely doesn't say.
+        function normalizeProfile(raw) {
+            if (!raw) return 'level2';
+            const val = Array.isArray(raw) ? raw[0] : raw;
+            if (typeof val !== 'string') return 'level2';
+            const match = val.match(/level([0-2])/);
+            return match ? `level${match[1]}` : 'level2';
+        }
+
         async function fetchImageInfo() {
             const serviceId = document.getElementById('imageService').value.trim();
             if (!serviceId) {
@@ -1484,8 +1539,9 @@ ob_start();
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 const info = await response.json();
-                
+
                 if (info.width && info.height) {
+                    currentImageProfile = normalizeProfile(info.profile);
                     document.getElementById('imageWidth').value = info.width;
                     document.getElementById('imageHeight').value = info.height;
                     document.getElementById('widthStatus').innerHTML = '<em style="color: #27ae60;">✓</em>';
@@ -1507,6 +1563,7 @@ ob_start();
                     throw new Error('No dimensions found');
                 }
             } catch (error) {
+                currentImageProfile = 'level2';
                 document.getElementById('widthStatus').innerHTML = '<em style="color: #e74c3c;">✗</em>';
                 document.getElementById('heightStatus').innerHTML = '<em style="color: #e74c3c;">✗</em>';
                 document.getElementById('imageThumbPreview').style.display = 'none';
@@ -1514,6 +1571,36 @@ ob_start();
             }
         }
         
+        function rotateIndividualImage(delta) {
+            const input = document.getElementById('indRotation');
+            const next = ((parseInt(input.value) || 0) + delta + 360) % 360;
+            input.value = next;
+            updateIndividualRotationUI();
+        }
+
+        function setIndividualRotation(value) {
+            const degrees = ((parseInt(value) || 0) % 360 + 360) % 360;
+            document.getElementById('indRotation').value = degrees;
+            updateIndividualRotationUI();
+        }
+
+        function flipIndividualImage() {
+            const btn = document.getElementById('indFlipBtn');
+            btn.classList.toggle('-active');
+            btn.style.background = btn.classList.contains('-active') ? '#ddeeff' : '';
+            updateIndividualRotationUI();
+        }
+
+        function individualHasTransform() {
+            const rotation = parseInt(document.getElementById('indRotation').value) || 0;
+            const flipped = document.getElementById('indFlipBtn').classList.contains('-active');
+            return rotation !== 0 || flipped;
+        }
+
+        function updateIndividualRotationUI() {
+            document.getElementById('indRotationMethodGroup').style.display = individualHasTransform() ? 'block' : 'none';
+        }
+
         // Generate individual manifest
         function generateIndividualManifest() {
             const imageUrl = document.getElementById('imageUrl').value;
@@ -1537,17 +1624,28 @@ ob_start();
 
             const width = parseInt(document.getElementById('imageWidth').value) || 1000;
             const height = parseInt(document.getElementById('imageHeight').value) || 693;
-            
+            const rotation = parseInt(document.getElementById('indRotation').value) || 0;
+            const flipped = document.getElementById('indFlipBtn').classList.contains('-active');
+            const rotationMethod = document.getElementById('indRotationMethod').value;
+            const hasTransform = rotation !== 0 || flipped;
+
+            // Canvas dimensions must reflect the rotated bounding box, not the
+            // image's native size, once a rotation is set — otherwise the
+            // canvas' aspect ratio wouldn't match what's actually displayed.
+            const bounds = hasTransform ? rotatedBounds(width, height, rotation) : { w: width, h: height };
+
             let canvasWidth, canvasHeight;
-            if (width > height) {
-                canvasWidth = Math.min(width, 800);
-                canvasHeight = Math.round(height * (canvasWidth / width));
+            if (bounds.w > bounds.h) {
+                canvasWidth = Math.min(bounds.w, 800);
+                canvasHeight = Math.round(bounds.h * (canvasWidth / bounds.w));
             } else {
-                canvasHeight = Math.min(height, 800);
-                canvasWidth = Math.round(width * (canvasHeight / height));
+                canvasHeight = Math.min(bounds.h, 800);
+                canvasWidth = Math.round(bounds.w * (canvasHeight / bounds.h));
             }
-            
-            const manifestBase = `${document.getElementById('baseUrl').value.replace(/\/$/, '')}/${manifestId}`;
+            canvasWidth = Math.round(canvasWidth);
+
+            const baseUrlValue = document.getElementById('baseUrl').value.trim() || 'https://example.org/iiif_manifests';
+            const manifestBase = `${baseUrlValue.replace(/\/$/, '')}/${manifestId}`;
             const secondLang    = individualSecondLangVisible ? secondaryLang    : '';
             const secondTitle   = individualSecondLangVisible ? titleSecondary   : '';
             const secondSummary = individualSecondLangVisible ? summarySecondary : '';
@@ -1571,6 +1669,64 @@ ob_start();
             });
             if (metadataEntries.length) manifest.metadata = metadataEntries;
 
+            const rotationSegment = flipped ? `!${rotation}` : String(rotation);
+
+            let body;
+            if (!hasTransform) {
+                body = {
+                    "id": imageUrl,
+                    "type": "Image",
+                    "format": "image/jpeg",
+                    "width": width,
+                    "height": height,
+                    "service": [{
+                        "id": imageService,
+                        "type": "ImageService3",
+                        "profile": currentImageProfile
+                    }]
+                };
+            } else if (rotationMethod === 'url') {
+                // Baked into the request URL. Works when the image is fetched
+                // directly; most deep-zoom viewers build their own tile requests
+                // from `service` (which carries no rotation) and silently ignore it.
+                body = {
+                    "id": `${imageService}/full/max/${rotationSegment}/default.jpg`,
+                    "type": "Image",
+                    "format": "image/jpeg",
+                    "width": width,
+                    "height": height,
+                    "service": [{
+                        "id": imageService,
+                        "type": "ImageService3",
+                        "profile": currentImageProfile
+                    }]
+                };
+            } else {
+                // ImageApiSelector (IIIF Registry of Selectors): rotation/mirror as
+                // structured data on a SpecificResource, rather than baked into the
+                // request URL. `source` stays the canonical, unrotated image;
+                // `selector.rotation` is always a string, mirror via a leading "!".
+                body = {
+                    "type": "SpecificResource",
+                    "source": {
+                        "id": `${imageService}/full/max/0/default.jpg`,
+                        "type": "Image",
+                        "format": "image/jpeg",
+                        "width": width,
+                        "height": height,
+                        "service": [{
+                            "id": imageService,
+                            "type": "ImageService3",
+                            "profile": currentImageProfile
+                        }]
+                    },
+                    "selector": {
+                        "type": "ImageApiSelector",
+                        "rotation": rotationSegment
+                    }
+                };
+            }
+
             manifest.items = [{
                 "id": `${manifestBase}/canvas/1`,
                 "type": "Canvas",
@@ -1585,22 +1741,11 @@ ob_start();
                         "type": "Annotation",
                         "motivation": "painting",
                         "target": `${manifestBase}/canvas/1`,
-                        "body": {
-                            "id": imageUrl,
-                            "type": "Image",
-                            "format": "image/jpeg",
-                            "width": width,
-                            "height": height,
-                            "service": [{
-                                "id": imageService,
-                                "type": "ImageService3",
-                                "profile": "level2"
-                            }]
-                        }
+                        "body": body
                     }]
                 }],
                 "thumbnail": [{
-                    "id": `${imageService}/full/300,/0/default.jpg`,
+                    "id": `${imageService}/full/300,/${rotationSegment}/default.jpg`,
                     "type": "Image",
                     "format": "image/jpeg"
                 }]
@@ -1622,7 +1767,11 @@ ob_start();
                     imageUrl: imageUrl,
                     serviceId: imageService,
                     width: width,
-                    height: height
+                    height: height,
+                    profile: currentImageProfile,
+                    rotation: rotation,
+                    flipH: flipped,
+                    rotationMethod: rotationMethod
                 }
             };
             
@@ -1744,11 +1893,12 @@ ob_start();
                         let derivativeX = padding;
                         
                         for (let i = 1; i < comparisonImages.length; i++) {
+                            const derivImg = comparisonImages[i];
                             positions.push({
                                 x: derivativeX,
                                 y: derivativeY,
                                 displayWidth: derivativeWidth,
-                                displayHeight: Math.round(derivativeWidth * 0.75)
+                                displayHeight: Math.round(derivativeWidth * (derivImg.height / derivImg.width))
                             });
                             derivativeX += derivativeWidth + padding;
                         }
@@ -1758,16 +1908,25 @@ ob_start();
                 case 'grid-2x2':
                     const gridCellWidth = (canvasWidth - padding * 3) / 2;
                     const gridCellHeight = (canvasHeight - padding * 3) / 2;
-                    
-                    comparisonImages.forEach((img, index) => {
+
+                    if (comparisonImages.length > 4) {
+                        showMessage('2x2 Grid only shows the first 4 images; the rest are left unpositioned.', 'error');
+                    }
+
+                    comparisonImages.slice(0, 4).forEach((img, index) => {
                         const row = Math.floor(index / 2);
                         const col = index % 2;
-                        
+                        const cellScale = Math.min(gridCellWidth / img.width, gridCellHeight / img.height);
+                        const fitWidth = Math.round(img.width * cellScale);
+                        const fitHeight = Math.round(img.height * cellScale);
+                        const cellX = padding + col * (gridCellWidth + padding);
+                        const cellY = padding + row * (gridCellHeight + padding);
+
                         positions.push({
-                            x: padding + col * (gridCellWidth + padding),
-                            y: padding + row * (gridCellHeight + padding),
-                            displayWidth: gridCellWidth,
-                            displayHeight: gridCellHeight
+                            x: Math.round(cellX + (gridCellWidth - fitWidth) / 2),
+                            y: Math.round(cellY + (gridCellHeight - fitHeight) / 2),
+                            displayWidth: fitWidth,
+                            displayHeight: fitHeight
                         });
                     });
                     break;
@@ -2011,7 +2170,7 @@ ob_start();
             const manifestId = `comparison-${viewer}-${Date.now()}`;
             const canvasWidth = 1600;
             const canvasHeight = 700;
-            const baseUrl = document.getElementById('comparisonBaseUrl').value.replace(/\/$/, '');
+            const baseUrl = (document.getElementById('comparisonBaseUrl').value.trim() || 'https://example.org/iiif_manifests').replace(/\/$/, '');
 
             const manifest = {
                 "@context": ["http://iiif.io/api/presentation/3/context.json"],
@@ -2052,7 +2211,7 @@ ob_start();
                                     "service": [{
                                         "id": img.serviceId,
                                         "type": "ImageService3",
-                                        "profile": "level2"
+                                        "profile": img.profile || 'level2'
                                     }]
                                 }
                             }]
@@ -2116,7 +2275,7 @@ ob_start();
                                     "service": [{
                                         "id": img.serviceId,
                                         "type": "ImageService3",
-                                        "profile": "level2"
+                                        "profile": img.profile || 'level2'
                                     }]
                                 },
                                 "target": `${baseUrl}/${manifestId}/canvas/layout#xywh=${x},${y},${w},${h}`
@@ -2210,12 +2369,66 @@ ob_start();
             }
 
             const canvasLabel = m.label || { none: [m.title || 'Image'] };
+            const mWidth  = m.width  || 1000;
+            const mHeight = m.height || 700;
+            const mRotation = m.rotation || 0;
+            const mFlipped  = !!m.flipH;
+            const mHasTransform = mRotation !== 0 || mFlipped;
+            const mRotationSegment = mFlipped ? `!${mRotation}` : String(mRotation);
+            const mBounds = mHasTransform ? rotatedBounds(mWidth, mHeight, mRotation) : { w: mWidth, h: mHeight };
+
+            let mCanvasWidth, mCanvasHeight;
+            if (mBounds.w > mBounds.h) {
+                mCanvasWidth = Math.round(Math.min(mBounds.w, 800));
+                mCanvasHeight = Math.round(mBounds.h * (mCanvasWidth / mBounds.w));
+            } else {
+                mCanvasHeight = Math.round(Math.min(mBounds.h, 800));
+                mCanvasWidth = Math.round(mBounds.w * (mCanvasHeight / mBounds.h));
+            }
+
+            let mBody;
+            if (!mHasTransform) {
+                mBody = {
+                    "id":      m.imageUrl,
+                    "type":    "Image",
+                    "format":  "image/jpeg",
+                    "width":   mWidth,
+                    "height":  mHeight,
+                    "service": [{ "id": m.serviceId, "type": "ImageService3", "profile": m.profile || 'level2' }]
+                };
+            } else if (m.rotationMethod === 'url') {
+                mBody = {
+                    "id":      `${m.serviceId}/full/max/${mRotationSegment}/default.jpg`,
+                    "type":    "Image",
+                    "format":  "image/jpeg",
+                    "width":   mWidth,
+                    "height":  mHeight,
+                    "service": [{ "id": m.serviceId, "type": "ImageService3", "profile": m.profile || 'level2' }]
+                };
+            } else {
+                mBody = {
+                    "type": "SpecificResource",
+                    "source": {
+                        "id":      `${m.serviceId}/full/max/0/default.jpg`,
+                        "type":    "Image",
+                        "format":  "image/jpeg",
+                        "width":   mWidth,
+                        "height":  mHeight,
+                        "service": [{ "id": m.serviceId, "type": "ImageService3", "profile": m.profile || 'level2' }]
+                    },
+                    "selector": {
+                        "type": "ImageApiSelector",
+                        "rotation": mRotationSegment
+                    }
+                };
+            }
+
             manifest.items = [{
                 "id":     `${baseUrl}/${manifestId}/canvas/1`,
                 "type":   "Canvas",
                 "label":  canvasLabel,
-                "width":  m.width  || 1000,
-                "height": m.height || 700,
+                "width":  mCanvasWidth,
+                "height": mCanvasHeight,
                 "items": [{
                     "id":   `${baseUrl}/${manifestId}/page/1`,
                     "type": "AnnotationPage",
@@ -2224,17 +2437,10 @@ ob_start();
                         "type":       "Annotation",
                         "motivation": "painting",
                         "target":     `${baseUrl}/${manifestId}/canvas/1`,
-                        "body": {
-                            "id":      m.imageUrl,
-                            "type":    "Image",
-                            "format":  "image/jpeg",
-                            "width":   m.width  || 1000,
-                            "height":  m.height || 700,
-                            "service": [{ "id": m.serviceId, "type": "ImageService3", "profile": "level2" }]
-                        }
+                        "body": mBody
                     }]
                 }],
-                "thumbnail": [{ "id": `${m.serviceId}/full/300,/0/default.jpg`, "type": "Image", "format": "image/jpeg" }]
+                "thumbnail": [{ "id": `${m.serviceId}/full/300,/${mRotationSegment}/default.jpg`, "type": "Image", "format": "image/jpeg" }]
             }];
 
             return JSON.stringify(manifest, null, 2);
@@ -2688,7 +2894,7 @@ ob_start();
                     artist: '',
                     date: '',
                     institution: '',
-                    rights: '',
+                    rights: img.rights || '',
                     provenance: {
                         sourceUrl: sourceUrl || '',
                         sourceLabel: provenanceLabel,
@@ -2697,7 +2903,11 @@ ob_start();
                     imageUrl: img.imageUrl,
                     serviceId: img.serviceId,
                     width: img.width,
-                    height: img.height
+                    height: img.height,
+                    profile: img.profile || 'level2',
+                    rotation: img.rotation || 0,
+                    flipH: !!img.flipH,
+                    rotationMethod: img.rotationMethod || 'selector'
                 }
             }));
         }
@@ -2707,6 +2917,17 @@ ob_start();
             const ctx = manifest['@context'] || '';
             const isV2 = (typeof ctx === 'string' ? ctx : ctx.join?.(' ') ?? '').includes('presentation/2');
             return isV2 ? extractImagesV2(manifest) : extractImagesV3(manifest);
+        }
+
+        // Plain (non-selector) bodies may still have rotation/mirror baked into the
+        // request URL itself (…/{region}/{size}/{rotation}/{quality}.{format}) —
+        // detect it on import so re-exporting later doesn't silently drop it.
+        function detectBakedRotation(imageUrl) {
+            const match = imageUrl.match(/\/(!?[\d.]+)\/[a-zA-Z0-9]+\.[a-zA-Z0-9]+$/);
+            if (!match) return { rotation: 0, flipH: false, rotationMethod: null };
+            const flipH = match[1].startsWith('!');
+            const rotation = parseFloat(flipH ? match[1].slice(1) : match[1]) || 0;
+            return { rotation, flipH, rotationMethod: (rotation !== 0 || flipH) ? 'url' : null };
         }
 
         function extractImagesV3(manifest) {
@@ -2722,13 +2943,33 @@ ob_start();
 
                 annotations.forEach(annotation => {
                     if (!annotation || annotation.type !== 'Annotation') return;
-                    const body = Array.isArray(annotation.body) ? annotation.body[0] : annotation.body;
-                    if (!body) return;
+                    const rawBody = Array.isArray(annotation.body) ? annotation.body[0] : annotation.body;
+                    if (!rawBody) return;
+
+                    // Unwrap a SpecificResource + ImageApiSelector body (rotation/mirror
+                    // as structured data rather than baked into the request URL) — the
+                    // real image lives at body.source, not body itself.
+                    const isSpecific = rawBody.type === 'SpecificResource';
+                    const body = isSpecific ? (rawBody.source || {}) : rawBody;
+                    const selector = isSpecific && rawBody.selector?.type === 'ImageApiSelector' ? rawBody.selector : null;
+
                     const imageUrl = body.id || body['@id'];
                     if (!imageUrl) return;
-                    const annLabel = getLabelText(annotation.label) || getLabelText(body.label);
+                    const annLabel = getLabelText(annotation.label) || getLabelText(rawBody.label) || getLabelText(body.label);
                     // If the canvas label is generic ("Canvas 34"), prefer the summary/description as title
                     const title = annLabel || (isGenericLabel(canvasLabel) && canvasSummary ? canvasSummary : canvasLabel);
+                    const bodySvc = Array.isArray(body.service) ? body.service[0] : body.service;
+
+                    let rotation = 0, flipH = false, rotationMethod = null;
+                    if (selector) {
+                        const rotationValue = String(selector.rotation ?? '0');
+                        flipH = rotationValue.startsWith('!');
+                        rotation = parseFloat(flipH ? rotationValue.slice(1) : rotationValue) || 0;
+                        rotationMethod = 'selector';
+                    } else {
+                        ({ rotation, flipH, rotationMethod } = detectBakedRotation(imageUrl));
+                    }
+
                     images.push({
                         id: annotation.id || `${canvas.id || 'canvas'}-${images.length + 1}`,
                         title,
@@ -2736,7 +2977,12 @@ ob_start();
                         imageUrl,
                         serviceId: extractServiceId(body) || imageUrl,
                         width: parseInt(body.width || canvas.width || 1000, 10) || 1000,
-                        height: parseInt(body.height || canvas.height || 700, 10) || 700
+                        height: parseInt(body.height || canvas.height || 700, 10) || 700,
+                        profile: normalizeProfile(bodySvc?.profile),
+                        rights: canvas.rights || rawBody.rights || body.rights || '',
+                        rotation,
+                        flipH,
+                        rotationMethod
                     });
                 });
             });
@@ -2762,6 +3008,8 @@ ob_start();
                         const serviceId = svc ? (svc['@id'] || svc.id || '') : '';
                         const annLabel = getLabelText(ann.label);
                         const title = annLabel || (isGenericLabel(canvasLabel) && canvasDesc ? canvasDesc : canvasLabel);
+                        const svcObj = Array.isArray(svc) ? svc[0] : svc;
+                        const { rotation, flipH, rotationMethod } = detectBakedRotation(imageUrl);
                         images.push({
                             id: ann['@id'] || canvas['@id'] || `canvas-${images.length + 1}`,
                             title,
@@ -2769,7 +3017,12 @@ ob_start();
                             imageUrl,
                             serviceId: serviceId || imageUrl,
                             width: parseInt(resource.width || canvas.width || 1000, 10) || 1000,
-                            height: parseInt(resource.height || canvas.height || 700, 10) || 700
+                            height: parseInt(resource.height || canvas.height || 700, 10) || 700,
+                            profile: normalizeProfile(svcObj?.profile),
+                            rights: canvas.license || resource.license || '',
+                            rotation,
+                            flipH,
+                            rotationMethod
                         });
                     });
                 });
@@ -2848,6 +3101,7 @@ ob_start();
                     serviceId: item.metadata.serviceId,
                     width: item.metadata.width,
                     height: item.metadata.height,
+                    profile: item.metadata.profile || 'level2',
                     rights: item.metadata.rights || '',
                     provenance: item.metadata.provenance || null,
                     rotation: 0,
@@ -3077,12 +3331,20 @@ ob_start();
                         results.push({valid: false, message: `Canvas ${ci + 1}: ${nonPainting.length} annotation(s) missing motivation: painting`});
                     annotations.forEach((ann, ai) => {
                         const body = Array.isArray(ann.body) ? ann.body[0] : ann.body;
-                        if (!body || !(body.id || body['@id']))
+                        // A SpecificResource body (e.g. carrying an ImageApiSelector for
+                        // rotation/mirror) has no id of its own — the real image is at
+                        // .source, which doesn't require its own id either.
+                        const isSpecific = body?.type === 'SpecificResource';
+                        const hasId = body && (
+                            body.id || body['@id'] ||
+                            (isSpecific && (body.source?.id || body.source?.['@id']))
+                        );
+                        if (!hasId)
                             results.push({valid: false, message: `Canvas ${ci + 1}, annotation ${ai + 1}: body missing id`});
                     });
                     if (items.length === 1 && annotations.length > 1) {
-                        const target = annotations[0].target;
-                        typeof target === 'string' && target.includes('#xywh=')
+                        const hasXywh = annotations.some(a => typeof a.target === 'string' && a.target.includes('#xywh='));
+                        hasXywh
                             ? results.push({valid: true, message: `Single-canvas composition: ${annotations.length} images with xywh targets`})
                             : results.push({valid: false, message: 'Single-canvas composition: targets missing #xywh fragment'});
                     } else {
@@ -3180,6 +3442,12 @@ ob_start();
             document.getElementById('rightsLicense').value = '';
             document.getElementById('rightsCustom').value = '';
             document.getElementById('indRightsCustomGroup').style.display = 'none';
+            document.getElementById('indRotation').value = 0;
+            const flipBtn = document.getElementById('indFlipBtn');
+            flipBtn.classList.remove('-active');
+            flipBtn.style.background = '';
+            document.getElementById('indRotationMethod').value = 'selector';
+            document.getElementById('indRotationMethodGroup').style.display = 'none';
             currentIndividualManifest = null;
         }
         
@@ -3761,6 +4029,7 @@ ob_start();
                     <strong>${escapeHtml(m.title)}</strong>
                     ${m.artist ? `<span style="font-size:11px;color:#7f8c8d;"> · ${escapeHtml(m.artist)}</span>` : ''}
                     ${m.date   ? `<span style="font-size:11px;color:#7f8c8d;"> · ${escapeHtml(m.date)}</span>` : ''}
+                    ${(m.rotation || m.flipH) ? `<span class="rotation-badge" title="Actual rotation/flip state carried from import — may differ from what the title text says">↻ ${m.rotation || 0}°${m.flipH ? ' mirrored' : ''}</span>` : ''}
                     ${m.provenance?.sourceLabel ? `<span class="provenance-badge">${escapeHtml(m.provenance.sourceLabel)}</span>` : ''}
                 </div>
             </div>`;
@@ -3790,7 +4059,9 @@ ob_start();
                 if (!m.serviceId) return;
                 laCreateLayer(m.serviceId, m.width, m.height, {
                     title: m.title, description: m.description || '',
-                    date: m.date || '', institution: m.institution || '', rights: m.rights || ''
+                    date: m.date || '', institution: m.institution || '', rights: m.rights || '',
+                    profile: m.profile || 'level2',
+                    rotation: m.rotation || 0, flipH: !!m.flipH
                 });
             });
             laLibSelected.clear();
@@ -3857,7 +4128,7 @@ ob_start();
             const sid = laDeriveServiceId(url);
             try {
                 const info = await laFetchInfo(sid);
-                laCreateLayer(sid, info.w, info.h, { title: sid.split('/').filter(Boolean).pop() || 'Layer' });
+                laCreateLayer(sid, info.w, info.h, { title: sid.split('/').filter(Boolean).pop() || 'Layer', profile: info.profile });
                 urlEl.value = '';
                 laShowMsg('Layer added.', 'success');
                 setTimeout(() => laShowMsg(''), 2000);
@@ -3885,6 +4156,33 @@ ob_start();
             setTimeout(() => laShowMsg(''), 2000);
         }
 
+        // Axis-aligned bounding box of a w x h rectangle rotated by deg degrees.
+        // Generalizes the old 90/270-only swap to any angle (exact match at 0/90/180/270).
+        function rotatedBounds(w, h, deg) {
+            const rad = (deg || 0) * Math.PI / 180;
+            const c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
+            return { w: w * c + h * s, h: w * s + h * c };
+        }
+
+        // Inverse of rotatedBounds: given a target bounding box, solve for the
+        // pre-rotation content size at this angle. The system is singular at
+        // odd multiples of 45 degrees (bounding box alone can't determine both
+        // dimensions there) — falls back to scaling fallbackW/fallbackH's own
+        // aspect ratio to match the target box's area.
+        function contentSizeForBounds(bw, bh, deg, fallbackW, fallbackH) {
+            const rad = (deg || 0) * Math.PI / 180;
+            const c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
+            const det = c * c - s * s;
+            if (Math.abs(det) < 0.001) {
+                const scale = Math.sqrt((bw * bh) / Math.max(1, fallbackW * fallbackH));
+                return { w: Math.max(1, fallbackW * scale), h: Math.max(1, fallbackH * scale) };
+            }
+            return {
+                w: Math.max(1, (bw * c - bh * s) / det),
+                h: Math.max(1, (bh * c - bw * s) / det)
+            };
+        }
+
         function laDeriveServiceId(url) {
             url = url.trim().replace(/\/info\.json$/, '').replace(/\/$/, '');
             const m = url.match(/^(.+?)\/(?:full|square|pct:|[\d]+,[\d]*|,[\d]+)/);
@@ -3896,7 +4194,7 @@ ob_start();
             if (!res.ok) throw new Error('fetch failed');
             const j = await res.json();
             if (!j.width || !j.height) throw new Error('no dimensions');
-            return { w: j.width, h: j.height };
+            return { w: j.width, h: j.height, profile: normalizeProfile(j.profile) };
         }
 
         function laShowMsg(text, type) {
@@ -3910,8 +4208,11 @@ ob_start();
         // ── Layer creation & operations ───────────────────────────────────
         function laCreateLayer(serviceId, nw, nh, meta) {
             laPushUndo();
+            const rotation = meta?.rotation || 0;
+            const flipH = !!meta?.flipH;
+            const bounds = rotation ? rotatedBounds(nw, nh, rotation) : { w: nw, h: nh };
             const isFirst = laLayers.length === 0;
-            if (isFirst) { laCanvasW = nw; laCanvasH = nh; laRecalcScale(); }
+            if (isFirst) { laCanvasW = Math.round(bounds.w); laCanvasH = Math.round(bounds.h); laRecalcScale(); }
             const id = Math.random().toString(36).slice(2, 9);
             laLayers.push({
                 id, serviceId,
@@ -3920,11 +4221,12 @@ ob_start();
                 date:        meta?.date        || '',
                 institution: meta?.institution || '',
                 rights:      meta?.rights      || '',
+                profile:     meta?.profile     || 'level2',
                 nw, nh,
                 x: 0, y: 0,
-                w: isFirst ? laCanvasW : nw,
-                h: isFirst ? laCanvasH : nh,
-                opacity: 1, visible: true, rotation: 0, flipH: false
+                w: isFirst ? laCanvasW : bounds.w,
+                h: isFirst ? laCanvasH : bounds.h,
+                opacity: 1, visible: true, rotation, flipH
             });
             laSelectedId = laLayers[laLayers.length - 1].id;
             laRenderAll();
@@ -3975,9 +4277,9 @@ ob_start();
             const l = laLayers.find(l => l.id === id);
             if (!l) return;
             laPushUndo();
-            const transposed = l.rotation === 90 || l.rotation === 270;
-            l.w = transposed ? l.nh : l.nw;
-            l.h = transposed ? l.nw : l.nh;
+            const bounds = rotatedBounds(l.nw, l.nh, l.rotation || 0);
+            l.w = bounds.w;
+            l.h = bounds.h;
             laPosDiv(l); laRenderPanel(); saveLayerSession();
         }
 
@@ -3986,16 +4288,30 @@ ob_start();
             if (l) { laPushUndo(); l.x = 0; l.y = 0; l.w = laCanvasW; l.h = laCanvasH; laPosDiv(l); laRenderPanel(); saveLayerSession(); }
         }
 
+        // Recomputes a layer's bounding box for a new rotation, keeping its
+        // visual center fixed (like rotating an object in place in any design
+        // tool) rather than anchoring the old top-left corner — anchoring the
+        // corner lets the box grow asymmetrically and silently walks the
+        // layer away from where it visually was, sometimes by a huge amount.
+        function laApplyRotation(l, newRot) {
+            const oldRot = l.rotation || 0;
+            const oldBounds = rotatedBounds(l.nw, l.nh, oldRot);
+            const newBounds = rotatedBounds(l.nw, l.nh, newRot);
+            const newW = newBounds.w * (l.w / oldBounds.w);
+            const newH = newBounds.h * (l.h / oldBounds.h);
+            l.x += (l.w - newW) / 2;
+            l.y += (l.h - newH) / 2;
+            l.w = newW;
+            l.h = newH;
+            l.rotation = newRot;
+        }
+
         function laRotateLayer(id, delta) {
             const l = laLayers.find(l => l.id === id);
             if (!l) return;
             laPushUndo();
-            const oldRot = l.rotation || 0;
-            const newRot = ((oldRot + delta) % 360 + 360) % 360;
-            const wasTransposed = oldRot === 90 || oldRot === 270;
-            const isTransposed  = newRot === 90 || newRot === 270;
-            if (wasTransposed !== isTransposed) { const tmp = l.w; l.w = l.h; l.h = tmp; }
-            l.rotation = newRot;
+            const newRot = (((l.rotation || 0) + delta) % 360 + 360) % 360;
+            laApplyRotation(l, newRot);
             laPosDiv(l);
             laRenderPanel();
             saveLayerSession();
@@ -4006,11 +4322,7 @@ ob_start();
             if (!l) return;
             laPushUndo();
             const newRot = Math.round(((+val) % 360 + 360) % 360);
-            const oldRot = l.rotation || 0;
-            const wasTransposed = oldRot === 90 || oldRot === 270;
-            const isTransposed  = newRot === 90 || newRot === 270;
-            if (wasTransposed !== isTransposed) { const tmp = l.w; l.w = l.h; l.h = tmp; }
-            l.rotation = newRot;
+            laApplyRotation(l, newRot);
             laPosDiv(l);
             laRenderPanel();
             saveLayerSession();
@@ -4031,6 +4343,26 @@ ob_start();
             laRenderPanel();
             saveLayerSession();
             showMessage('All layers snapped to canvas.', 'success');
+        }
+
+        function laFitCanvasToLayers() {
+            if (!laLayers.length) { laShowMsg('No layers to fit.', 'error'); return; }
+            laPushUndo();
+            const minX = Math.min(...laLayers.map(l => l.x));
+            const minY = Math.min(...laLayers.map(l => l.y));
+            const maxX = Math.max(...laLayers.map(l => l.x + l.w));
+            const maxY = Math.max(...laLayers.map(l => l.y + l.h));
+            laLayers.forEach(l => { l.x -= minX; l.y -= minY; laPosDiv(l); });
+            // Ceil, not round: this must never shrink below the true bounding
+            // size, or a layer can end up a fraction of a pixel "outside" the
+            // very canvas that's supposed to contain it.
+            laCanvasW = Math.ceil(maxX - minX);
+            laCanvasH = Math.ceil(maxY - minY);
+            laRecalcScale();
+            laRenderAll();
+            saveLayerSession();
+            laShowMsg(`Canvas resized to ${laCanvasW}×${laCanvasH} to fit all layers.`, 'success');
+            setTimeout(() => laShowMsg(''), 3000);
         }
 
         function laApplyCanvasResize() {
@@ -4260,9 +4592,8 @@ ob_start();
         function laWrapperStyle(layer) {
             const r = layer.rotation || 0;
             const s = laScale;
-            const needsSwap = r === 90 || r === 270;
-            const pw = needsSwap ? layer.h : layer.w;
-            const ph = needsSwap ? layer.w : layer.h;
+            const content = contentSizeForBounds(layer.w, layer.h, r, layer.nw, layer.nh);
+            const pw = content.w, ph = content.h;
             const top  = (layer.h - ph) / 2;
             const left = (layer.w - pw) / 2;
             const flip = layer.flipH ? ' scaleX(-1)' : '';
@@ -4390,8 +4721,20 @@ ob_start();
             if (!title)         { showMessage('Enter a manifest title.', 'error'); return; }
             if (!laLayers.length) { showMessage('Add at least one layer.', 'error'); return; }
 
+            // 0.5px tolerance: target coordinates are Math.round()-ed at export
+            // anyway, so sub-pixel float drift here shouldn't trigger a warning
+            // about something that won't actually show up in the manifest.
+            const BOUNDS_EPS = 0.5;
+            const outOfBounds = laLayers.some(l =>
+                l.x < -BOUNDS_EPS || l.y < -BOUNDS_EPS ||
+                l.x + l.w > laCanvasW + BOUNDS_EPS || l.y + l.h > laCanvasH + BOUNDS_EPS);
+            if (outOfBounds) {
+                showMessage('Warning: one or more layers extend outside the canvas (e.g. from rotating near an edge) — the manifest was still generated, but consider "Fit canvas to layers" first.', 'error');
+            }
+
             const mid      = `layered-${Date.now()}`;
             const canvasId = `${baseUrl}/${mid}/canvas/1`;
+            const rotationMethod = document.getElementById('laRotationMethod').value;
 
             const manifest = {
                 "@context": ["http://iiif.io/api/presentation/3/context.json"],
@@ -4404,12 +4747,39 @@ ob_start();
                     "items": [{
                         "id": `${baseUrl}/${mid}/page/1`, "type": "AnnotationPage",
                         "items": laLayers.map((layer, i) => {
-                            const body = {
-                                "id":     `${layer.serviceId}/full/max/${layer.flipH ? '!' : ''}${layer.rotation || 0}/default.jpg`,
-                                "type":   "Image", "format": "image/jpeg",
-                                "width":  layer.nw, "height": layer.nh,
-                                "service": [{ "id": layer.serviceId, "type": "ImageService3", "profile": "level2" }]
-                            };
+                            const rotation = layer.rotation || 0;
+                            const flipped = !!layer.flipH;
+                            const hasTransform = rotation !== 0 || flipped;
+                            const rotationSegment = flipped ? `!${rotation}` : String(rotation);
+                            const nativeBounds = rotatedBounds(layer.nw, layer.nh, rotation);
+                            const bodyW = Math.round(nativeBounds.w);
+                            const bodyH = Math.round(nativeBounds.h);
+
+                            let body;
+                            if (hasTransform && rotationMethod === 'selector') {
+                                // ImageApiSelector: `source` stays the canonical, unrotated
+                                // image (native nw/nh); the rotated bounding box (bodyW/bodyH)
+                                // still describes the annotation's own display size, same as
+                                // the baked-in-URL body below, so positioning/xywh math is
+                                // unaffected by which method is chosen.
+                                body = {
+                                    "type": "SpecificResource",
+                                    "source": {
+                                        "id":      `${layer.serviceId}/full/max/0/default.jpg`,
+                                        "type":    "Image", "format": "image/jpeg",
+                                        "width":   layer.nw, "height": layer.nh,
+                                        "service": [{ "id": layer.serviceId, "type": "ImageService3", "profile": layer.profile || 'level2' }]
+                                    },
+                                    "selector": { "type": "ImageApiSelector", "rotation": rotationSegment }
+                                };
+                            } else {
+                                body = {
+                                    "id":     `${layer.serviceId}/full/max/${rotationSegment}/default.jpg`,
+                                    "type":   "Image", "format": "image/jpeg",
+                                    "width":  bodyW, "height": bodyH,
+                                    "service": [{ "id": layer.serviceId, "type": "ImageService3", "profile": layer.profile || 'level2' }]
+                                };
+                            }
                             if (layer.title)       body.label   = { [lang]: [layer.title] };
                             if (layer.description) body.summary = { [lang]: [layer.description] };
                             if (layer.rights)      body.rights  = layer.rights;

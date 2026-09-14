@@ -4,9 +4,9 @@ Extracts <fig> elements from <body>, fetches dimensions from info.json,
 and writes a multi-canvas manifest ready for upload.
 
 Usage:
-    python xml_to_manifest.py article.xml
-    python xml_to_manifest.py article.xml output.json
-    python xml_to_manifest.py article.xml output.json my_config.json
+    python xml-to-manifest.py article.xml
+    python xml-to-manifest.py article.xml output.json
+    python xml-to-manifest.py article.xml output.json my_config.json
 """
 
 import json
@@ -17,6 +17,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urlparse
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -49,11 +50,40 @@ def flatten(el) -> str:
     return " ".join("".join(el.itertext()).split()) if el is not None else ""
 
 
-def fetch_dimensions(service_id: str, fallback_w: int = 1000, fallback_h: int = 1000) -> tuple:
-    url = service_id.rstrip("/") + "/info.json"
+def coerce_scheme(url: str, force_http_hosts: list) -> str:
+    """Return url with scheme forced to http if its hostname is in force_http_hosts."""
+    if not force_http_hosts:
+        return url
+    parsed = urlparse(url)
+    if parsed.hostname in force_http_hosts:
+        return parsed._replace(scheme="http").geturl()
+    return url
+
+
+# IIIF Presentation 3.0's recognized rights vocabularies are canonically
+# http:// — validators match the exact string, even though both sites now
+# redirect http → https. Editors will naturally type https:// (or paste it
+# from a browser bar), so normalize rather than reject.
+RIGHTS_HTTP_HOSTS = {"creativecommons.org", "rightsstatements.org"}
+
+
+def normalize_rights_uri(url: str) -> str:
+    if not url:
+        return url
+    parsed = urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname in RIGHTS_HTTP_HOSTS:
+        return parsed._replace(scheme="http").geturl()
+    return url
+
+
+def fetch_dimensions(service_id: str, fallback_w: int = 1000, fallback_h: int = 1000,
+                     force_http_hosts: list = None) -> tuple:
+    force_http_hosts = force_http_hosts or []
+    info_url = coerce_scheme(service_id.rstrip("/") + "/info.json", force_http_hosts)
+
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": "IIIF-manifest-generator/1.0"}
+            info_url, headers={"User-Agent": "IIIF-manifest-generator/1.0"}
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             info = json.loads(resp.read().decode())
@@ -61,7 +91,7 @@ def fetch_dimensions(service_id: str, fallback_w: int = 1000, fallback_h: int = 
         print(f"  ✓ {service_id.split('/')[-1]}  {w}×{h}")
         return w, h
     except Exception as exc:
-        print(f"  ⚠ {url}: {exc} — using {fallback_w}×{fallback_h}")
+        print(f"  ⚠ {info_url}: {exc} — using {fallback_w}×{fallback_h}")
         return fallback_w, fallback_h
 
 
@@ -74,16 +104,20 @@ def extract_and_build(xml_path: str, out_path: str, cfg: dict):
         print("⚠  No <body> found — scanning entire document.")
         body = root
 
-    FALLBACK_W = cfg.get("fallback_width",  1000)
-    FALLBACK_H = cfg.get("fallback_height", 1000)
-    FETCH_DELAY = cfg.get("fetch_delay", 0.3)
+    FALLBACK_W       = cfg.get("fallback_width",  1000)
+    FALLBACK_H       = cfg.get("fallback_height", 1000)
+    FETCH_DELAY      = cfg.get("fetch_delay", 0.3)
+    FORCE_HTTP_HOSTS = cfg.get("force_http_hosts", [])  # e.g. ["images.example.org"]
+
+    if FORCE_HTTP_HOSTS:
+        print(f"ℹ  HTTP (not HTTPS) will be used for info.json requests to: {FORCE_HTTP_HOSTS}")
 
     manifest = {
         "@context": "http://iiif.io/api/presentation/3/context.json",
         "id":    cfg["manifest_id"],
         "type":  "Manifest",
         "label": {"it": [cfg["label_it"]], "en": [cfg["label_en"]]},
-        "rights": cfg["rights"],
+        "rights": normalize_rights_uri(cfg["rights"]),
         "requiredStatement": {
             "label": {"it": ["Fonte"],                "en": ["Attribution"]},
             "value": {"it": [cfg["required_stmt_it"]], "en": [cfg["required_stmt_en"]]}
@@ -141,8 +175,8 @@ def extract_and_build(xml_path: str, out_path: str, cfg: dict):
             skipped.append(position)
             continue
 
-        # Fetch dimensions
-        w, h = fetch_dimensions(service_id, FALLBACK_W, FALLBACK_H)
+        # Fetch dimensions — uses HTTP for hosts listed in force_http_hosts
+        w, h = fetch_dimensions(service_id, FALLBACK_W, FALLBACK_H, FORCE_HTTP_HOSTS)
         time.sleep(FETCH_DELAY)
 
         canvas_id     = f"{cfg['base_canvas']}/canvas/{fig_id}"
@@ -185,13 +219,15 @@ def extract_and_build(xml_path: str, out_path: str, cfg: dict):
 
         if cap_text:
             canvas["summary"] = {"it": [cap_text]}
-        
-# Per-canvas rights: use figure-level licence if present, otherwise inherit manifest rights
+
+        # Per-canvas rights: use figure-level licence if present, otherwise inherit manifest rights
         licence_el = fig.find(".//permissions/license")
         if licence_el is None:
             licence_el = fig.find(".//license")
-        licence = licence_el.get("{http://www.w3.org/1999/xlink}href", "").strip() \
-                  if licence_el is not None else ""
+        licence = normalize_rights_uri(
+            licence_el.get(f"{XLINK}href", "").strip()
+            if licence_el is not None else ""
+        )
 
         if licence:
             canvas["rights"] = licence
