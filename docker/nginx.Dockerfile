@@ -27,6 +27,18 @@ RUN npm install phantomjs-prebuilt@2.1.16 --ignore-scripts && \
     mv package-lock.json ${MODULES_DIR} && \
     ln -s ${MODULES_DIR}/* .
 
+# Mirador 3.x's asArray() only treats `undefined` as "empty", not `null`. When a
+# manifest omits an optional property (e.g. requiredStatement), manifesto.js's
+# getter returns null, so asArray(null) becomes [null] instead of [] — and
+# selectors like getRequiredStatement() then crash calling .getValues() on that
+# null entry (TypeError: Cannot read properties of null (reading 'getValues')).
+# Fixed upstream in Mirador 4.x (optional chaining), but 4.x is a breaking
+# change for our custom annotation plugin/mirador-imagecropper pin, so patch
+# just this one function in the installed 3.x package instead of upgrading.
+RUN sed -i 's/if (value === undefined) return \[\];/if (value === undefined || value === null) return [];/' \
+    node_modules/mirador/dist/es/src/lib/asArray.js \
+    node_modules/mirador/dist/cjs/src/lib/asArray.js
+
 # copy source AFTER npm install - code changes won't bust the npm cache
 COPY ./publink/mirador-annotations .
 
