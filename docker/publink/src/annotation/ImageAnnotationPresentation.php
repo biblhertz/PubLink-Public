@@ -93,7 +93,7 @@ class ImageAnnotationPresentation
     {
         $annarr = json_decode($this->annotation->getAnnotation());
         $json   = htmlspecialchars(json_encode($annarr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        return '<pre class="small mb-0" style="word-wrap:break-word;overflow-wrap:break-word;white-space:pre-wrap;max-width:100%">'
+        return '<pre class="mb-0" style="word-wrap:break-word;overflow-wrap:break-word;white-space:pre-wrap;max-width:100%">'
              . $json . '</pre>';
     }
 
@@ -142,11 +142,11 @@ class ImageAnnotationPresentation
                     .     '<i class="fas fa-copy"></i> Copy link'
                     .   '</button>'
                     . '</div>'
-                    . '<details class="mt-1"><summary class="small text-muted" style="cursor:pointer">JSON</summary>'
-                    . '<pre class="small mt-1 mb-0" style="word-wrap:break-word;overflow-wrap:break-word;white-space:pre-wrap">' . $regionJSON . '</pre>'
+                    . '<details class="mt-1"><summary class="text-muted" style="cursor:pointer">JSON</summary>'
+                    . '<pre class="mt-1 mb-0" style="word-wrap:break-word;overflow-wrap:break-word;white-space:pre-wrap">' . $regionJSON . '</pre>'
                     . '</details>';
 
-        $annCell = '<details><summary class="small text-muted" style="cursor:pointer">Show annotation JSON</summary>'
+        $annCell = '<details><summary class="text-muted" style="cursor:pointer">Show annotation JSON</summary>'
                  . $this->prettyPrintAnnotation()
                  . '</details>';
 
@@ -568,7 +568,7 @@ class ImageAnnotationPresentation
         }
 
         $str .= "<tr><th width=\"20%\">Annotations</th><td width=\"80%\">Check for inclusion in manifest<hr/><table>$cb</table></td></tr>
-                 <tr><th width=\"20%\">API Key</th><td width=\"80%\">" . htmlPage::makeInput("api_key", 200, "password", 50) . " <span class=\"text-muted small\">(required to publish)</span></td></tr>
+                 <tr><th width=\"20%\">API Key</th><td width=\"80%\">" . htmlPage::makeInput("api_key", 200, "password", 50) . " <span class=\"text-muted\">(required to publish)</span></td></tr>
                  <tr><th width=\"20%\">Publish on Server</th><td width=\"80%\">" . htmlPage::makeButton("publish", "Publish on Public Facing Server") . "</td></tr>
                  <tr><th width=\"20%\">Get Manifest File</th><td width=\"80%\">" . htmlPage::makeButton("getManifest", "Get Manifest As File") . "</td></tr>
                  </table>";
