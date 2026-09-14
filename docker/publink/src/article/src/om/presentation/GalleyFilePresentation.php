@@ -69,7 +69,7 @@ class GalleyFilePresentation {
      * @return string HTML <table> markup.
      */
     public function getAsTable(): string {
-        $str  = "<table class=\"table table-bordered table-sm small\">";
+        $str  = "<table class=\"table table-bordered table-sm\">";
         $str .= "<tr><td class=\"text-nowrap fw-bold\" style=\"width:1%\">Name</td><td>"     . htmlspecialchars($this->galleyFile->getGalleyFileName(),    ENT_QUOTES, 'UTF-8') . "</td></tr>";
         $str .= "<tr><td class=\"text-nowrap fw-bold\" style=\"width:1%\">Alt Text</td><td>" . htmlspecialchars($this->galleyFile->getGalleyFileAltText(), ENT_QUOTES, 'UTF-8') . "</td></tr>";
         $str .= "<tr><td class=\"text-nowrap fw-bold\" style=\"width:1%\">Type</td><td>"     . htmlspecialchars($this->galleyFile->getGalleyFileType(),    ENT_QUOTES, 'UTF-8') . "</td></tr>";
