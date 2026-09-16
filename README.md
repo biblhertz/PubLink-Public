@@ -4,6 +4,8 @@ Publink is a web-based toolkit for digital publishing workflows, developed with 
 
 Designed to address bottlenecks in the publishing pipeline at the Bibliotheca Hertziana, Publink is also suitable for broader digital publishing use cases.
 
+**Live demo:** [publink.humanitiesconnect.pub](https://publink.humanitiesconnect.pub)
+
 ---
 
 ## Features
@@ -143,6 +145,26 @@ When no database schema changes are involved:
 6. Copy the saved database to `/publink/docker/mysql/bibliotheca.sql`
 7. Copy the saved file archive back to `/publink/docker/local-data`
 8. Make the init script executable and run it: `chmod +x init.sh && ./init.sh`
+
+---
+
+## Related Projects
+
+Other components in the same digital-publishing pipeline:
+
+| Project | Description |
+|---|---|
+| [iiif-editorial-toolkit](https://github.com/biblhertz/iiif-editorial-toolkit) | Standalone browser-based tools for building/managing IIIF manifests, plus a JATS-to-manifest generator script |
+| [PubLinkSMS](https://github.com/biblhertz/PubLinkSMS) | IIIF manifest REST server used to publish and serve manifests, linked to OJS publications |
+| [jats_to_ojs](https://github.com/biblhertz/jats_to_ojs) | PHP CLI converting JATS XML articles into OJS native XML for import |
+| [jats_refactoring](https://github.com/biblhertz/jats_refactoring) | Editorial scripts for fixing JATS references and converting JATS/BibTeX to InDesign XML |
+
+---
+
+## Publications
+
+- Bastianello, E. & Tomlinson, C. D., Adamou, A. (2024). [PubLink: Editorial Workflow for Digital Scholarly Publications in the Humanities](https://doi.org/10.1145/3800935.3830875). *Proceedings of the 35th ACM Conference on Hypertext.*
+- Bastianello, E. & Tomlinson, C. D. (2026). [Bridging Digital and Publishing in the Humanities: Connecting Editorial Workflows through Open Standards](https://doi.org/10.1145/3800935.3830875). *Proceedings of the 37th ACM Conference on Hypertext.*
 
 ---
 
