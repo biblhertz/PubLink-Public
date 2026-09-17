@@ -1,4 +1,12 @@
 
+# Pinned so this stack's project name (and hence its container/image/network
+# names) never depends on the parent directory being named "docker" --
+# without this, this project and any other PubLink-family stack sharing that
+# directory name (e.g. PubLinkSMS) both default to the same Compose project
+# name and collide: same image tags (docker-mysql, docker-web, ...) get
+# overwritten by whichever stack was built most recently, and explicit
+# container_name values (mysql, web, ...) fight over the same container.
+name: publink
 
 networks:
   publink-network:
