@@ -351,6 +351,16 @@ class OMToOJSArticleAdapter {
         $this->xmlWriter->writeAttribute("current_publication_id", 100);
         $this->xmlWriter->writeAttribute("date_submitted",       $this->article->getDate());
 
+        // 3.4/3.5 moved the submission's locale attribute from <publication>
+        // (still where 3.3 wants it, in writePublication()) to the root
+        // <article>/submission element -- pkppublication no longer declares
+        // it in those versions' schema, submission does. Needed so the
+        // importer knows the submission's real primary language rather than
+        // falling back to the site's own default (see writePublication()).
+        if ($this->version === self::$OJS_3_4 || $this->version === self::$OJS_3_5) {
+            $this->xmlWriter->writeAttribute("locale", $this->normalizeLocale($this->locale));
+        }
+
         $this->writeIdElement(100);
         $this->writeSubmissionFiles();
         $this->writePublication();
@@ -503,10 +513,17 @@ class OMToOJSArticleAdapter {
         $this->xmlWriter->startElement("publication");
         $this->xmlWriter->writeAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
 
-        // Version-specific attributes on <publication>
+        // <publication locale="..."> declares the submission's primary
+        // language, which the importer validates locale-sensitive fields
+        // (e.g. author affiliation) against -- but only in 3.3's schema.
+        // 3.4/3.5 moved this attribute onto the root <article> element
+        // instead (pkppublication no longer declares it there); see the
+        // locale attribute written in writeArticle().
         if ($this->version === self::$OJS_3_3) {
             $this->addLocaleAttribute();
         }
+
+        // Version-specific attributes on <publication>
         if ($this->version === self::$OJS_3_4 || $this->version === self::$OJS_3_5) {
             $this->xmlWriter->writeAttribute("access_status",       "0");
             $this->xmlWriter->writeAttribute("xsi:schemaLocation",  "http://pkp.sfu.ca native.xsd");
