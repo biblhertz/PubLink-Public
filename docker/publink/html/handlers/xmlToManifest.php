@@ -92,15 +92,28 @@ try {
 
     // -------------------------------------------------------------------------
     // Validate required manifest config fields
+    //
+    // rights/required_stmt_it/required_stmt_en are institution-level and
+    // always required -- the underlying script can't derive them from the
+    // JATS content. manifest_id/base_canvas and label_it/label_en are no
+    // longer required on their own: manifest_id+base_canvas can instead be
+    // derived from base_url + the article's JATS filename, and label_it/
+    // label_en fall back to the JATS <title-group> when left blank.
     // -------------------------------------------------------------------------
 
-    $required = ['manifest_id', 'base_canvas', 'label_it', 'label_en',
-                 'rights', 'required_stmt_it', 'required_stmt_en'];
+    $required = ['rights', 'required_stmt_it', 'required_stmt_en'];
 
     foreach ($required as $field) {
         if (empty($_POST[$field])) {
             throw new Exception("Required manifest config field '$field' is missing or empty");
         }
+    }
+
+    $hasExplicitIds = !empty($_POST['manifest_id']) && !empty($_POST['base_canvas']);
+    if (!$hasExplicitIds && empty($_POST['base_url'])) {
+        throw new Exception(
+            "Either 'manifest_id' + 'base_canvas', or 'base_url' (to derive them automatically), is required"
+        );
     }
 
     if (isset(Config::$SCHEDULER_DEBUG)) {
@@ -123,10 +136,6 @@ try {
         "user_details_id"  => $page->getUser()->getID(),
         "task_id"          => $task->getID(),
         "job_id"           => $jobID,
-        "manifest_id"      => $_POST['manifest_id'],
-        "base_canvas"      => $_POST['base_canvas'],
-        "label_it"         => $_POST['label_it'],
-        "label_en"         => $_POST['label_en'],
         "rights"           => $_POST['rights'],
         "required_stmt_it" => $_POST['required_stmt_it'],
         "required_stmt_en" => $_POST['required_stmt_en'],
@@ -134,6 +143,20 @@ try {
             ? array_values(array_filter(array_map('trim', explode(',', $_POST['force_http_hosts']))))
             : [],
     ];
+
+    // manifest_id/base_canvas and label_it/label_en are passed through only
+    // when actually given -- xml2manifest.php (and the script's own config
+    // loader) treat their *absence* as "derive this instead", not an empty
+    // string, so an always-present-but-blank value here would silently
+    // defeat that fallback.
+    if ($hasExplicitIds) {
+        $parameters['manifest_id'] = $_POST['manifest_id'];
+        $parameters['base_canvas'] = $_POST['base_canvas'];
+    } else {
+        $parameters['base_url'] = $_POST['base_url'];
+    }
+    if (!empty($_POST['label_it'])) $parameters['label_it'] = $_POST['label_it'];
+    if (!empty($_POST['label_en'])) $parameters['label_en'] = $_POST['label_en'];
 
     foreach (['fetch_delay', 'fallback_width', 'fallback_height'] as $key) {
         if (!empty($_POST[$key])) $parameters[$key] = $_POST[$key];

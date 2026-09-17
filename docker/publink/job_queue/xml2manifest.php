@@ -12,14 +12,19 @@
  * @param  array   $params  Job parameters; must include:
  *                            - 'file_id'           (int)    ID of the source JATS XML file
  *                            - 'user_details_id'   (int)    ID of the owning user
- *                            - 'manifest_id'       (string) Canonical manifest URL
- *                            - 'base_canvas'       (string) Base canvas URL
- *                            - 'label_it'          (string) Italian manifest label
- *                            - 'label_en'          (string) English manifest label
  *                            - 'rights'            (string) Rights/licence URL
  *                            - 'required_stmt_it'  (string) Italian attribution statement
  *                            - 'required_stmt_en'  (string) English attribution statement
+ *                          Either both of:
+ *                            - 'manifest_id'       (string) Canonical manifest URL
+ *                            - 'base_canvas'       (string) Base canvas URL
+ *                          Or, to derive them from the JATS filename instead:
+ *                            - 'base_url'          (string) Base URL for auto-derived ids
  *                          Optional:
+ *                            - 'label_it'          (string) Italian manifest label
+ *                                                   (auto-derived from JATS <title-group> if absent)
+ *                            - 'label_en'          (string) English manifest label
+ *                                                   (auto-derived from JATS <title-group> if absent)
  *                            - 'fetch_delay'       (float)  Delay between info.json fetches
  *                            - 'fallback_width'    (int)    Canvas width when info.json unreachable
  *                            - 'fallback_height'   (int)    Canvas height when info.json unreachable
@@ -39,10 +44,16 @@ try {
     $user = new User($objDB, $params['user_details_id']);
     $file = new File($objDB, $params['file_id']);
     $logger->print("Source   :: " . $file->getName());
-    $logger->print("Manifest :: " . $params['manifest_id']);
+    $logger->print("Manifest :: " . ($params['manifest_id'] ?? '(auto-derived from base_url: ' . ($params['base_url'] ?? '?') . ')'));
 
-    // Derive the output filename from the canonical manifest_id URL supplied in the form.
-    $manifestName = basename(parse_url($params['manifest_id'], PHP_URL_PATH));
+    // Derive the output filename from the canonical manifest_id URL supplied
+    // in the form, when given -- otherwise (base_url mode) there's no
+    // pre-known manifest_id to derive it from, so fall through to the same
+    // JATS-filename-based fallback used when manifest_id doesn't parse into
+    // a usable filename.
+    $manifestName = !empty($params['manifest_id'])
+        ? basename(parse_url($params['manifest_id'], PHP_URL_PATH))
+        : '';
     if (!$manifestName || pathinfo($manifestName, PATHINFO_EXTENSION) !== 'json') {
         $manifestName = $file->getFileNameWithoutExtension() . "_manifest.json";
     }
@@ -62,16 +73,25 @@ try {
         $logger->print("xml2manifest :: removed existing output file: $outputFilePath");
     }
 
-    // Assemble the manifest config from job parameters.
+    // Assemble the manifest config from job parameters. manifest_id/
+    // base_canvas/base_url/label_it/label_en are included only when
+    // actually present in $params -- the script's own config loader
+    // distinguishes "key absent" (derive it) from "key present but blank",
+    // so an always-present empty string here would silently defeat that.
     $configData = [
-        'manifest_id'      => $params['manifest_id'],
-        'base_canvas'      => $params['base_canvas'],
-        'label_it'         => $params['label_it'],
-        'label_en'         => $params['label_en'],
         'rights'           => $params['rights'],
         'required_stmt_it' => $params['required_stmt_it'],
         'required_stmt_en' => $params['required_stmt_en'],
     ];
+
+    if (!empty($params['manifest_id']) && !empty($params['base_canvas'])) {
+        $configData['manifest_id'] = $params['manifest_id'];
+        $configData['base_canvas'] = $params['base_canvas'];
+    } elseif (!empty($params['base_url'])) {
+        $configData['base_url'] = $params['base_url'];
+    }
+    if (!empty($params['label_it'])) $configData['label_it'] = $params['label_it'];
+    if (!empty($params['label_en'])) $configData['label_en'] = $params['label_en'];
 
     foreach (['fetch_delay', 'fallback_width', 'fallback_height'] as $key) {
         if (isset($params[$key])) $configData[$key] = $params[$key];

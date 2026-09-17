@@ -849,12 +849,20 @@ class ArticlePresentation extends ObjectPresentation {
 
         $p = fn(string $key, string $default = '') => $f($prevParams[$key] ?? $default);
 
+        $str .= '<p class="text-muted small mb-1">Either fill in <strong>Manifest ID</strong> + '
+              . '<strong>Base Canvas URL</strong> directly, or leave both blank and give a '
+              . '<strong>Base URL</strong> instead — the manifest ID and base canvas will then be '
+              . 'derived automatically from that base URL and this article\'s JATS filename.</p>';
         $str .= $field('manifest_id',  'Manifest ID',
-                    $p('manifest_id'), 'text', 'https://annotation.biblhertz.it/iiif_manifests/…/article.json');
+                    $p('manifest_id'), 'text', 'https://annotation.biblhertz.it/iiif_manifests/…/article.json', false);
         $str .= $field('base_canvas',  'Base Canvas URL',
-                    $p('base_canvas'), 'text', 'https://annotation.biblhertz.it/iiif_manifests/…/article');
-        $str .= $field('label_it',     'Label (Italian)',  $p('label_it', $title ?: $this->article->getTitle()));
-        $str .= $field('label_en',     'Label (English)',  $p('label_en', $titleEn ?: $this->article->getTransTitle()));
+                    $p('base_canvas'), 'text', 'https://annotation.biblhertz.it/iiif_manifests/…/article', false);
+        $str .= $field('base_url',     'Base URL (alternative to the two fields above)',
+                    $p('base_url'), 'text', 'https://annotation.biblhertz.it/iiif_manifests/HSAH/04', false);
+        $str .= '<p class="text-muted small mb-1">Labels are pre-filled from this article\'s title; '
+              . 'clear a field to instead derive it from the JATS &lt;title-group&gt; at generation time.</p>';
+        $str .= $field('label_it',     'Label (Italian)',  $p('label_it', $title ?: $this->article->getTitle()), 'text', '', false);
+        $str .= $field('label_en',     'Label (English)',  $p('label_en', $titleEn ?: $this->article->getTransTitle()), 'text', '', false);
         $str .= $field('rights',       'Rights URL',
                     $p('rights', 'https://creativecommons.org/licenses/by/4.0/'), 'text');
         $str .= $field('required_stmt_it', 'Attribution (Italian)',
