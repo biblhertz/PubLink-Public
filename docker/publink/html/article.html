@@ -512,15 +512,25 @@ try {
     $page->setHeading("Article :: " . $article->getTitle());
 
     // Export and action toolbar links
-    $ojsLinks = [];
+    //
+    // OJS export is tucked behind a <details> toggle rather than listed
+    // inline: 3 versions x published/unpublished is 6 links, which crowded
+    // out the rest of the toolbar when they were all listed flat.
+    $ojsRows = '';
     foreach (['3_3', '3_4', '3_5'] as $ojsVersion) {
-        $base = "article.html?oid=" . $object->getID() . "&getAsOJS=true&version=$ojsVersion";
-        $ojsLinks[] = htmlPage::makeLink("$base&published=1", "Get As OJS " . str_replace('_', '.', $ojsVersion) . " File (published)")
-                    . " / "
-                    . htmlPage::makeLink("$base&published=0", "(unpublished)");
+        $base  = "article.html?oid=" . $object->getID() . "&getAsOJS=true&version=$ojsVersion";
+        $label = str_replace('_', '.', $ojsVersion);
+        $ojsRows .= '<div>OJS ' . $label . ': '
+                  .   htmlPage::makeLink("$base&published=1", "Published")
+                  .   ' / '
+                  .   htmlPage::makeLink("$base&published=0", "Unpublished")
+                  . '</div>';
     }
-    $content .= "<p>" . implode(" | ", $ojsLinks);
-    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsJATSXML=true",           "Get As JATS File");
+    $content .= '<details class="mb-2"><summary style="cursor:pointer">Get As OJS File</summary>'
+              .   '<div class="ms-3 mt-1">' . $ojsRows . '</div>'
+              . '</details>';
+
+    $content .= "<p>" . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsJATSXML=true",           "Get As JATS File");
     $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsBibtex=true",            "Get Bibtex References");
     $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsDataCite=true",          "Get DataCite References");
     if (Config::$TEI_PUBLISHER_INTEGRATION) {
