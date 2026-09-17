@@ -133,6 +133,17 @@ Run these from the `/publink/docker` directory:
 | `start.sh` | Tears down all containers and images, rebuilds from scratch, and starts the stack. |
 | `restart.sh` | Backs up the database, tears down all containers and images, rebuilds, and starts the stack. |
 
+### Before Manually Rebuilding a Container
+
+`mysql` has no persistent Docker volume by design — its data lives only in
+the running container's own writable layer, so recreating that container
+discards it, and the next start reseeds fresh from `mysql/bibliotheca.sql`.
+`start.sh`/`restart.sh` already back up before tearing anything down, but if
+you run `docker compose build`/`up`/`down` manually (e.g. during
+development) instead of using those scripts, **run `./dbbackup.sh` first** —
+that's the only thing standing between you and losing whatever's in the
+database right now.
+
 ### Upgrading
 
 When no database schema changes are involved:

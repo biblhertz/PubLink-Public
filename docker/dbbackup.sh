@@ -1,4 +1,9 @@
 #!/bin/bash
+# mysql has no persistent Docker volume by design -- this dump (and the copy
+# to mysql/bibliotheca.sql, reloaded as the seed on next container start) is
+# the only thing that survives a container rebuild. start.sh/restart.sh
+# already call this before tearing anything down; run it yourself first if
+# you're rebuilding manually (docker compose build/up/down) instead.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TARGET_DIR="$SCRIPT_DIR/db_backup/"
