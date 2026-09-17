@@ -456,8 +456,9 @@ class OMToOJSNativeAdapter {
      *   {@code getAbstract()}; unlike {@see OMToOJSArticleAdapter} this does
      *   not call {@code ->getAsText()} on the result
      * - {@code <keywords>} (locale-aware) — only when keywords are present;
-     *   each keyword is written via {@code trim($keyword)} (raw scalar,
-     *   not an object)
+     *   each keyword is written as {@code <keyword><name>...</name></keyword>},
+     *   per pkp-native.xsd's ControlledVocabEntryType (name is a required
+     *   child element, not the keyword's own text content)
      *
      * @return void
      */
@@ -492,8 +493,10 @@ class OMToOJSNativeAdapter {
             $this->addLocaleAttribute();
             foreach ($keywords as $keyword) {
                 $this->xmlWriter->startElement("keyword");
+                $this->xmlWriter->startElement("name");
                 $this->xmlWriter->writeRaw(trim($keyword->getName()));
-                $this->xmlWriter->endElement();
+                $this->xmlWriter->endElement(); // </name>
+                $this->xmlWriter->endElement(); // </keyword>
             }
             $this->xmlWriter->endElement(); // </keywords>
         }

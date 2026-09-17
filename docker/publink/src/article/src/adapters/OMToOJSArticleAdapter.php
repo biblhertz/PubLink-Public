@@ -456,7 +456,7 @@ class OMToOJSArticleAdapter {
         $this->xmlWriter->writeAttribute("xsi:schemaLocation", "http://pkp.sfu.ca native.xsd");
 
         $this->xmlWriter->startElement("name");
-        $this->xmlWriter->writeAttribute("locale", $galley->getLocale());
+        $this->xmlWriter->writeAttribute("locale", $this->normalizeLocale($galley->getLocale()));
         $this->xmlWriter->writeRaw($galley->getName());
         $this->xmlWriter->endElement();
 
@@ -552,8 +552,15 @@ class OMToOJSArticleAdapter {
      * - {@code <licenseUrl>} — only when set
      * - {@code <copyrightHolder>} (locale-aware) — only when set
      * - {@code <copyrightYear>} — only when set
-     * - {@code <keywords>} (locale-aware) — only when the Article has keywords;
-     *   each keyword is written as a child {@code <keyword>} element
+     * - {@code <keywords>} (locale-aware) — only when the Article has keywords.
+     *   PKP changed the schema in OJS 3.5: {@see $OJS_3_3} / {@see $OJS_3_4}
+     *   still expect flat {@code <keyword>text</keyword>} (plain xs:string in
+     *   their native.xsd), while {@see $OJS_3_5} requires
+     *   {@code <keyword><name>text</name></keyword>} (ControlledVocabEntryType,
+     *   name is a required child element). Confirmed directly against PKP's
+     *   pkp-native.xsd on the stable-3_3_0/stable-3_4_0/stable-3_5_0 tags —
+     *   the two formats are not interchangeable, so this is branched by
+     *   version rather than always emitting one or the other.
      *
      * @return void
      */
@@ -612,8 +619,16 @@ class OMToOJSArticleAdapter {
             $this->addLocaleAttribute();
             foreach ($keywords as $keyword) {
                 $this->xmlWriter->startElement("keyword");
-                $this->xmlWriter->writeRaw(trim($keyword->getName()));
-                $this->xmlWriter->endElement();
+                if ($this->version === self::$OJS_3_5) {
+                    // 3.5's schema requires a <name> child (ControlledVocabEntryType)
+                    $this->xmlWriter->startElement("name");
+                    $this->xmlWriter->writeRaw(trim($keyword->getName()));
+                    $this->xmlWriter->endElement(); // </name>
+                } else {
+                    // 3.3/3.4 expect plain text content
+                    $this->xmlWriter->writeRaw(trim($keyword->getName()));
+                }
+                $this->xmlWriter->endElement(); // </keyword>
             }
             $this->xmlWriter->endElement(); // </keywords>
         }
@@ -745,14 +760,14 @@ class OMToOJSArticleAdapter {
             ) {
                 $this->xmlWriter->startElement("article_galley");
                 $this->xmlWriter->writeAttribute("xmlns:xsi",        "http://www.w3.org/2001/XMLSchema-instance");
-                $this->xmlWriter->writeAttribute("locale",            $galley->getLocale());
+                $this->xmlWriter->writeAttribute("locale",            $this->normalizeLocale($galley->getLocale()));
                 $this->xmlWriter->writeAttribute("approved",          "false");
                 $this->xmlWriter->writeAttribute("xsi:schemaLocation","http://pkp.sfu.ca native.xsd");
 
                 $this->writeIdElement(100);
 
                 $this->xmlWriter->startElement("name");
-                $this->xmlWriter->writeAttribute("locale", $galley->getLocale());
+                $this->xmlWriter->writeAttribute("locale", $this->normalizeLocale($galley->getLocale()));
                 // Use uppercased file extension as the galley display label
                 $this->xmlWriter->writeRaw(strtoupper($galley->getGalleyFileType()));
                 $this->xmlWriter->endElement();
@@ -800,7 +815,45 @@ class OMToOJSArticleAdapter {
      * @return void
      */
     protected function addLocaleAttribute(): void {
-        $this->xmlWriter->writeAttribute("locale", $this->locale);
+        $this->xmlWriter->writeAttribute("locale", $this->normalizeLocale($this->locale));
+    }
+
+    /**
+     * Common short language codes with no region subtag, mapped to the
+     * region OJS conventionally pairs them with. Not exhaustive — anything
+     * else falls through {@see normalizeLocale()} unchanged.
+     */
+    private const LOCALE_REGION_FALLBACK = [
+        'en' => 'en_US',
+        'it' => 'it_IT',
+        'de' => 'de_DE',
+        'fr' => 'fr_FR',
+        'es' => 'es_ES',
+        'pt' => 'pt_PT',
+    ];
+
+    /**
+     * Normalise a locale code to the xx_YY form OJS 3.3/3.4's native XML
+     * schema strictly requires (a bare "it" fails their locale pattern,
+     * even though OJS 3.5 relaxed it to also accept bare codes).
+     *
+     * Data should already arrive in xx_YY form (see
+     * {@see JATSToOMAdapter::importArticle()}, which now preserves the
+     * region from JATS xml:lang rather than truncating it) — this exists
+     * as a safety net for already-imported articles or manually-entered
+     * locale values that predate that fix, not as the primary source of
+     * truth. Left as a no-op for 3.5, whose relaxed schema already accepts
+     * either form, so its already-validated output isn't touched.
+     *
+     * @param  string $locale e.g. "it", "it_IT", or ""
+     * @return string Unchanged for OJS 3.5 or an already xx_YY-shaped value;
+     *                mapped via {@see LOCALE_REGION_FALLBACK} for a known
+     *                bare code; otherwise returned as-is.
+     */
+    private function normalizeLocale(string $locale): string {
+        if ($this->version === self::$OJS_3_5) return $locale;
+        if (preg_match('/^[a-z]{2}_[A-Z]{2}(@[a-z]+)?$/', $locale)) return $locale;
+        return self::LOCALE_REGION_FALLBACK[$locale] ?? $locale;
     }
 
 

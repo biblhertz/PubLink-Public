@@ -303,10 +303,16 @@ class JATSToOMAdapter {
                 // --- Section 0: <front> — all metadata ---
                 if ($c == 0) {
 
-                    // Extract and normalise the locale/language code
+                    // Extract and normalise the locale/language code.
+                    // JATS xml:lang is BCP-47 (hyphen-separated, e.g. "it-IT"),
+                    // but Article::getLocale() / the OJS+JATS exporters expect
+                    // OJS's underscore-separated form (e.g. "it_IT") — convert
+                    // rather than truncate, or the region is lost and OJS 3.3/
+                    // 3.4's native XML schema (which requires the full xx_YY
+                    // form) rejects the export on import.
                     $result = $xml->xpath('//@xml:lang');
                     $lang   = (string) $result[0];
-                    if (strlen($lang) > 2) $lang = substr($lang, 0, 2);  // Truncate e.g. "en-US" → "en"
+                    $lang   = str_replace('-', '_', $lang);
                     $this->logger->print("Extracted Locale as $lang");
                     if (!empty($lang)) $this->article->setLocale($lang);
 
