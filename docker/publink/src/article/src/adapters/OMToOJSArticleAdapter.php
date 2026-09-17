@@ -128,6 +128,17 @@ class OMToOJSArticleAdapter {
      */
     private int $version;
 
+    /**
+     * Whether the exported submission should be marked as published on
+     * import. Defaults to true (the adapter's original, only behaviour).
+     * Written as OJS's PKPSubmission::STATUS_PUBLISHED (3) when true, or
+     * STATUS_QUEUED (1) when false -- there is no dedicated "unpublished"
+     * status; queued is what an import lands in prior to publication.
+     *
+     * @var bool
+     */
+    private bool $published = true;
+
 
     /****************************************************************/
     /*  CLASS CONSTRUCTOR                                            */
@@ -164,6 +175,17 @@ class OMToOJSArticleAdapter {
      */
     public function setLogger(Logger $l): void {
         $this->logger = $l;
+    }
+
+    /**
+     * Sets whether the exported submission should be marked as published.
+     *
+     * @param bool $published True (default) for STATUS_PUBLISHED, false for
+     *                        STATUS_QUEUED (i.e. imported but not published).
+     * @return void
+     */
+    public function setPublished(bool $published): void {
+        $this->published = $published;
     }
 
     /**
@@ -345,7 +367,7 @@ class OMToOJSArticleAdapter {
         $this->xmlWriter->startElement("article");
         $this->xmlWriter->writeAttribute("xmlns",                "http://pkp.sfu.ca");
         $this->xmlWriter->writeAttribute("xmlns:xsi",            "http://www.w3.org/2001/XMLSchema-instance");
-        $this->xmlWriter->writeAttribute("status",               "3");
+        $this->xmlWriter->writeAttribute("status",               $this->getSubmissionStatus());
         $this->xmlWriter->writeAttribute("submission_progress",  "0");
         $this->xmlWriter->writeAttribute("stage",                "production");
         $this->xmlWriter->writeAttribute("current_publication_id", 100);
@@ -532,7 +554,7 @@ class OMToOJSArticleAdapter {
         }
 
         $this->xmlWriter->writeAttribute("version",        "1");
-        $this->xmlWriter->writeAttribute("status",         "3");
+        $this->xmlWriter->writeAttribute("status",         $this->getSubmissionStatus());
         $this->xmlWriter->writeAttribute("date_published", $this->article->getDate());
         $this->xmlWriter->writeAttribute("section_ref",    $this->article->getSectionRef());
         $this->xmlWriter->writeAttribute("seq",            0);
@@ -871,6 +893,16 @@ class OMToOJSArticleAdapter {
         if ($this->version === self::$OJS_3_5) return $locale;
         if (preg_match('/^[a-z]{2}_[A-Z]{2}(@[a-z]+)?$/', $locale)) return $locale;
         return self::LOCALE_REGION_FALLBACK[$locale] ?? $locale;
+    }
+
+    /**
+     * Returns the OJS submission status code to write, per {@see $published}.
+     *
+     * @return string "3" (PKPSubmission::STATUS_PUBLISHED) or "1"
+     *                (STATUS_QUEUED).
+     */
+    private function getSubmissionStatus(): string {
+        return $this->published ? "3" : "1";
     }
 
 

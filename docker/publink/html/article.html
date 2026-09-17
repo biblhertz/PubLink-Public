@@ -267,6 +267,7 @@ try {
             $var = "OJS_" . $_REQUEST['version'];
             $adapter->setVersion(OMToOJSArticleAdapter::$$var);
         }
+        $adapter->setPublished(($_REQUEST['published'] ?? '1') !== '0');
         $str = $adapter->generateXML();
 
         header("Content-type: text/plain");
@@ -511,9 +512,14 @@ try {
     $page->setHeading("Article :: " . $article->getTitle());
 
     // Export and action toolbar links
-    $content .= "<p>" . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_3",   "Get As OJS 3.3 File");
-    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_4",   "Get As OJS 3.4 File");
-    $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsOJS=true&version=3_5",   "Get As OJS 3.5 File");
+    $ojsLinks = [];
+    foreach (['3_3', '3_4', '3_5'] as $ojsVersion) {
+        $base = "article.html?oid=" . $object->getID() . "&getAsOJS=true&version=$ojsVersion";
+        $ojsLinks[] = htmlPage::makeLink("$base&published=1", "Get As OJS " . str_replace('_', '.', $ojsVersion) . " File (published)")
+                    . " / "
+                    . htmlPage::makeLink("$base&published=0", "(unpublished)");
+    }
+    $content .= "<p>" . implode(" | ", $ojsLinks);
     $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsJATSXML=true",           "Get As JATS File");
     $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsBibtex=true",            "Get Bibtex References");
     $content .= " | " . htmlPage::makeLink("article.html?oid=" . $object->getID() . "&getAsDataCite=true",          "Get DataCite References");
